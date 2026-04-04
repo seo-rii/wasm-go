@@ -1,4 +1,5 @@
-export type SupportedGoTarget = 'wasip1/wasm' | 'js/wasm';
+export type SupportedGoWasiTarget = 'wasip1/wasm' | 'wasip2/wasm' | 'wasip3/wasm';
+export type SupportedGoTarget = SupportedGoWasiTarget | 'js/wasm';
 export type BrowserGoArtifactFormat = 'go-archive' | 'wasi-core-wasm' | 'js-wasm';
 export type BrowserGoCompileStage = 'manifest' | 'plan' | 'compile' | 'link' | 'done';
 export type CompilerLogLevel = 'log' | 'warn' | 'error' | 'debug';

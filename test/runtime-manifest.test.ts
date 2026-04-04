@@ -14,6 +14,8 @@ describe('runtime manifest', () => {
 
 		expect(manifest.goVersion).toBe('go1.26.1');
 		expect(manifest.targets['wasip1/wasm']?.target).toBe('wasip1/wasm');
+		expect(manifest.targets['wasip2/wasm']?.goos).toBe('wasip1');
+		expect(manifest.targets['wasip3/wasm']?.goos).toBe('wasip1');
 		expect(manifest.targets['js/wasm']?.execution.kind).toBe('js-wasm-exec');
 	});
 
@@ -55,6 +57,8 @@ describe('runtime manifest', () => {
 	it('resolves explicit targets and rejects missing targets', () => {
 		const manifest = normalizeRuntimeManifest(createRuntimeManifest());
 		expect(resolveTargetManifest(manifest, 'js/wasm').execution.kind).toBe('js-wasm-exec');
+		expect(resolveTargetManifest(manifest, 'wasip2/wasm').goos).toBe('wasip1');
+		expect(resolveTargetManifest(manifest, 'wasip3/wasm').goos).toBe('wasip1');
 		expect(() =>
 			resolveTargetManifest(
 				normalizeRuntimeManifest({
@@ -74,5 +78,8 @@ describe('runtime manifest', () => {
 		);
 
 		expect(loaded.defaultTarget).toBe('wasip1/wasm');
+		expect(Object.keys(loaded.targets)).toEqual(
+			expect.arrayContaining(['wasip1/wasm', 'wasip2/wasm', 'wasip3/wasm', 'js/wasm'])
+		);
 	});
 });

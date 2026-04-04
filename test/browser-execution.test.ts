@@ -60,6 +60,21 @@ describe('browser execution', () => {
 		expect(result.stderr).toBe('');
 	});
 
+	it('also executes transitional wasip2/wasip3 aliases through the preview1 host', async () => {
+		const bytes = await buildPreview1StdoutModule();
+
+		for (const target of ['wasip2/wasm', 'wasip3/wasm'] as const) {
+			const result = await executeBrowserGoArtifact({
+				bytes,
+				target,
+				format: 'wasi-core-wasm'
+			});
+
+			expect(result.exitCode).toBe(0);
+			expect(result.stdout).toBe('hi\n');
+		}
+	});
+
 	it('rejects js/wasm execution until wasm_exec.js is wired', async () => {
 		await expect(
 			executeBrowserGoArtifact({
@@ -67,6 +82,6 @@ describe('browser execution', () => {
 				target: 'js/wasm',
 				format: 'js-wasm'
 			})
-		).rejects.toThrow(/currently executes only wasip1\/wasm artifacts/);
+		).rejects.toThrow(/currently executes only preview1-compatible wasi core-wasm artifacts/);
 	});
 });

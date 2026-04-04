@@ -210,9 +210,14 @@ export async function executeBrowserGoArtifact(
 	artifact: BrowserGoArtifact,
 	options: BrowserExecutionOptions = {}
 ): Promise<BrowserExecutionResult> {
-	if (artifact.target !== 'wasip1/wasm' || artifact.format !== 'wasi-core-wasm') {
+	if (
+		(artifact.target !== 'wasip1/wasm' &&
+			artifact.target !== 'wasip2/wasm' &&
+			artifact.target !== 'wasip3/wasm') ||
+		artifact.format !== 'wasi-core-wasm'
+	) {
 		throw new Error(
-			'wasm-go currently executes only wasip1/wasm artifacts in-process. js/wasm output still needs wasm_exec.js integration.'
+			'wasm-go currently executes only preview1-compatible wasi core-wasm artifacts in-process. js/wasm output still needs wasm_exec.js integration.'
 		);
 	}
 	const host = createBrowserWasiHost(options);

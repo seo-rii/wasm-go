@@ -54,6 +54,39 @@ describe('compiler facade', () => {
 		expect(invocations).toHaveLength(2);
 	});
 
+	it('returns preview1-compatible core wasm artifacts for transitional wasip2/wasip3 targets', async () => {
+		const requestedTargets = ['wasip2/wasm', 'wasip3/wasm'] as const;
+
+		for (const target of requestedTargets) {
+			const result = await compileGo(
+				createCompileRequest({
+					target
+				}),
+				{
+					manifest: createRuntimeManifest(),
+					dependencies: {
+						runTool: async (invocation) => {
+							expect(invocation.env.GOOS).toBe('wasip1');
+							return {
+								exitCode: 0,
+								outputs: {
+									[invocation.outputPath]:
+										invocation.tool === 'compile'
+											? new Uint8Array([1, 2, 3])
+											: new Uint8Array([0, 97, 115, 109, 1])
+								}
+							};
+						}
+					}
+				}
+			);
+
+			expect(result.success).toBe(true);
+			expect(result.artifact?.target).toBe(target);
+			expect(result.artifact?.format).toBe('wasi-core-wasm');
+		}
+	});
+
 	it('returns go archives for library builds', async () => {
 		const result = await compileGo(
 			createCompileRequest({
@@ -104,6 +137,36 @@ describe('compiler facade', () => {
 		expect(fetched.some((url) => url.endsWith('/runtime/wasm_exec.js'))).toBe(true);
 		expect(fetched.some((url) => url.endsWith('/tools/compile.wasm.gz'))).toBe(true);
 		expect(fetched.some((url) => url.endsWith('/tools/link.wasm.gz'))).toBe(true);
+	});
+
+	it('preloads transitional preview targets with the shared packed sysroot', async () => {
+		const fetched: string[] = [];
+
+		const preload = await preloadBrowserGoRuntime({
+			manifest: createRuntimeManifest(),
+			target: 'wasip3/wasm',
+			fetchImpl: async (url) => {
+				fetched.push(String(url));
+				if (String(url).endsWith('.index.json.gz')) {
+					return new Response(
+						JSON.stringify({
+							format: 'wasm-go-runtime-pack-index-v1',
+							fileCount: 2,
+							totalBytes: 6,
+							entries: [
+								{ runtimePath: '/sysroot/fmt.a', offset: 0, length: 3 },
+								{ runtimePath: '/sysroot/runtime.a', offset: 3, length: 3 }
+							]
+						})
+					);
+				}
+				return new Response(new Uint8Array([1, 2, 3, 4, 5, 6]));
+			}
+		});
+
+		expect(preload.target.target).toBe('wasip3/wasm');
+		expect(fetched.some((url) => url.endsWith('/sysroot/wasip1.index.json.gz'))).toBe(true);
+		expect(fetched.some((url) => url.endsWith('/sysroot/wasip1.pack.gz'))).toBe(true);
 	});
 
 	it('accepts a code-only request and auto-populates sysroot dependencies', async () => {

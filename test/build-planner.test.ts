@@ -37,6 +37,28 @@ describe('build planner', () => {
 		expect(plan.cacheKeys.link).toMatch(/^wasm-go:link:/);
 	});
 
+	it('plans transitional wasip2 and wasip3 requests through the wasip1 toolchain env', () => {
+		const wasip2Plan = createBrowserGoBuildPlan(
+			createCompileRequest({
+				target: 'wasip2/wasm'
+			}),
+			createRuntimeManifest()
+		);
+		const wasip3Plan = createBrowserGoBuildPlan(
+			createCompileRequest({
+				target: 'wasip3/wasm'
+			}),
+			createRuntimeManifest()
+		);
+
+		expect(wasip2Plan.target).toBe('wasip2/wasm');
+		expect(wasip2Plan.compile.env.GOOS).toBe('wasip1');
+		expect(wasip2Plan.artifactFormat).toBe('wasi-core-wasm');
+		expect(wasip3Plan.target).toBe('wasip3/wasm');
+		expect(wasip3Plan.compile.env.GOOS).toBe('wasip1');
+		expect(wasip3Plan.artifactFormat).toBe('wasi-core-wasm');
+	});
+
 	it('emits embedcfg for embed-enabled packages', () => {
 		const plan = createBrowserGoBuildPlan(
 			createCompileRequest({

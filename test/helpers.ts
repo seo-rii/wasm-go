@@ -56,6 +56,52 @@ export function createRuntimeManifest(): RuntimeManifestV1 {
 					defaultTrimpath: '/workspace'
 				}
 			},
+			'wasip2/wasm': {
+				goos: 'wasip1',
+				goarch: 'wasm',
+				artifactFormat: 'wasi-core-wasm',
+				sysrootPack: {
+					index: 'sysroot/wasip1.index.json.gz',
+					asset: 'sysroot/wasip1.pack.gz',
+					fileCount: 2,
+					totalBytes: 6
+				},
+				execution: {
+					kind: 'wasi-preview1'
+				},
+				planner: {
+					workspaceRoot: '/workspace',
+					importcfgPath: '/workspace/importcfg',
+					embedcfgPath: '/workspace/embedcfg',
+					compileOutputPath: '/workspace/pkg/main.a',
+					linkOutputPath: '/workspace/bin/main.wasm',
+					defaultLang: 'go1.26',
+					defaultTrimpath: '/workspace'
+				}
+			},
+			'wasip3/wasm': {
+				goos: 'wasip1',
+				goarch: 'wasm',
+				artifactFormat: 'wasi-core-wasm',
+				sysrootPack: {
+					index: 'sysroot/wasip1.index.json.gz',
+					asset: 'sysroot/wasip1.pack.gz',
+					fileCount: 2,
+					totalBytes: 6
+				},
+				execution: {
+					kind: 'wasi-preview1'
+				},
+				planner: {
+					workspaceRoot: '/workspace',
+					importcfgPath: '/workspace/importcfg',
+					embedcfgPath: '/workspace/embedcfg',
+					compileOutputPath: '/workspace/pkg/main.a',
+					linkOutputPath: '/workspace/bin/main.wasm',
+					defaultLang: 'go1.26',
+					defaultTrimpath: '/workspace'
+				}
+			},
 			'js/wasm': {
 				goos: 'js',
 				goarch: 'wasm',

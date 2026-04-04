@@ -27,6 +27,7 @@ const hostArchives = {
 		sha256: '353df43a7811ce284c8938b5f3c7df40b7bfb6f56cb165b150bc40b5e2dd541f'
 	}
 };
+const packagedWasiTargets = ['wasip1/wasm', 'wasip2/wasm', 'wasip3/wasm'];
 
 function hostKey() {
 	return `${process.platform}-${process.arch}`;
@@ -317,6 +318,52 @@ async function main() {
 					defaultLang: 'go1.26',
 					defaultTrimpath: '/workspace'
 				}
+			},
+			'wasip2/wasm': {
+				goos: 'wasip1',
+				goarch: 'wasm',
+				artifactFormat: 'wasi-core-wasm',
+				sysrootPack: {
+					asset: 'sysroot/wasip1.pack.gz',
+					index: 'sysroot/wasip1.index.json.gz',
+					fileCount: packedSysroot.index.fileCount,
+					totalBytes: packedSysroot.index.totalBytes
+				},
+				execution: {
+					kind: 'wasi-preview1'
+				},
+				planner: {
+					workspaceRoot: '/workspace',
+					importcfgPath: '/workspace/importcfg',
+					embedcfgPath: '/workspace/embedcfg',
+					compileOutputPath: '/workspace/pkg/main.a',
+					linkOutputPath: '/workspace/bin/main.wasm',
+					defaultLang: 'go1.26',
+					defaultTrimpath: '/workspace'
+				}
+			},
+			'wasip3/wasm': {
+				goos: 'wasip1',
+				goarch: 'wasm',
+				artifactFormat: 'wasi-core-wasm',
+				sysrootPack: {
+					asset: 'sysroot/wasip1.pack.gz',
+					index: 'sysroot/wasip1.index.json.gz',
+					fileCount: packedSysroot.index.fileCount,
+					totalBytes: packedSysroot.index.totalBytes
+				},
+				execution: {
+					kind: 'wasi-preview1'
+				},
+				planner: {
+					workspaceRoot: '/workspace',
+					importcfgPath: '/workspace/importcfg',
+					embedcfgPath: '/workspace/embedcfg',
+					compileOutputPath: '/workspace/pkg/main.a',
+					linkOutputPath: '/workspace/bin/main.wasm',
+					defaultLang: 'go1.26',
+					defaultTrimpath: '/workspace'
+				}
 			}
 		}
 	};
@@ -341,7 +388,8 @@ async function main() {
 		sysroot: {
 			fileCount: packedSysroot.index.fileCount,
 			totalBytes: packedSysroot.index.totalBytes
-		}
+		},
+		supportedTargets: packagedWasiTargets
 	};
 	await writeFile(
 		path.join(distRuntimeDir, 'runtime-manifest.v1.json'),

@@ -1,0 +1,187 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+	compileGo,
+	createGoCompiler,
+	preloadBrowserGoRuntime
+} from '../src/compiler.js';
+import { createCompileRequest, createRuntimeManifest } from './helpers.js';
+
+describe('compiler facade', () => {
+	it('returns a clear failure when tool execution is not wired yet', async () => {
+		const result = await compileGo(createCompileRequest(), {
+			manifest: createRuntimeManifest()
+		});
+
+		expect(result.success).toBe(false);
+		expect(result.plan?.compile.tool).toBe('compile');
+		expect(result.stderr).toMatch(/phase 0-1 scaffolding is ready/);
+	});
+
+	it('runs compile and link invocations through an injected runner', async () => {
+		const invocations: string[] = [];
+		const compiler = await createGoCompiler({
+			manifest: createRuntimeManifest(),
+			dependencies: {
+				runTool: async (invocation) => {
+					invocations.push(`${invocation.tool}:${invocation.args.join(' ')}`);
+					if (invocation.tool === 'compile') {
+						return {
+							exitCode: 0,
+							stdout: 'compile ok\n',
+							outputs: {
+								[invocation.outputPath]: new Uint8Array([1, 2, 3])
+							}
+						};
+					}
+					return {
+						exitCode: 0,
+						stdout: 'link ok\n',
+						outputs: {
+							[invocation.outputPath]: new Uint8Array([0, 97, 115, 109, 1])
+						}
+					};
+				}
+			}
+		});
+
+		const result = await compiler.compile(createCompileRequest());
+
+		expect(result.success).toBe(true);
+		expect(result.artifact?.format).toBe('wasi-core-wasm');
+		expect(Array.from(result.artifact?.bytes as Uint8Array)).toEqual([0, 97, 115, 109, 1]);
+		expect(Array.from(result.artifact?.wasm as Uint8Array)).toEqual([0, 97, 115, 109, 1]);
+		expect(invocations).toHaveLength(2);
+	});
+
+	it('returns go archives for library builds', async () => {
+		const result = await compileGo(
+			createCompileRequest({
+				packageKind: 'library'
+			}),
+			{
+				manifest: createRuntimeManifest(),
+				dependencies: {
+					runTool: async (invocation) => ({
+						exitCode: 0,
+						outputs: {
+							[invocation.outputPath]: new Uint8Array([9, 9, 9])
+						}
+					})
+				}
+			}
+		);
+
+		expect(result.success).toBe(true);
+		expect(result.artifact?.format).toBe('go-archive');
+	});
+
+	it('preloads the selected runtime assets', async () => {
+		const fetched: string[] = [];
+		const preload = await preloadBrowserGoRuntime({
+			manifest: createRuntimeManifest(),
+			target: 'js/wasm',
+			fetchImpl: async (url) => {
+				fetched.push(String(url));
+				if (String(url).endsWith('.index.json.gz')) {
+					return new Response(
+						JSON.stringify({
+							format: 'wasm-go-runtime-pack-index-v1',
+							fileCount: 2,
+							totalBytes: 6,
+							entries: [
+								{ runtimePath: '/sysroot/fmt.a', offset: 0, length: 3 },
+								{ runtimePath: '/sysroot/runtime.a', offset: 3, length: 3 }
+							]
+						})
+					);
+				}
+				return new Response(new Uint8Array([1, 2, 3, 4, 5, 6]));
+			}
+		});
+
+		expect(preload.target.target).toBe('js/wasm');
+		expect(fetched.some((url) => url.endsWith('/runtime/wasm_exec.js'))).toBe(true);
+		expect(fetched.some((url) => url.endsWith('/tools/compile.wasm.gz'))).toBe(true);
+		expect(fetched.some((url) => url.endsWith('/tools/link.wasm.gz'))).toBe(true);
+	});
+
+	it('accepts a code-only request and auto-populates sysroot dependencies', async () => {
+		const manifest = createRuntimeManifest();
+		const wasip1Target = manifest.targets['wasip1/wasm'];
+		if (!wasip1Target) {
+			throw new Error('missing wasip1 target in test manifest');
+		}
+		const compiler = await createGoCompiler({
+			manifest: {
+				...manifest,
+				targets: {
+					...manifest.targets,
+					'wasip1/wasm': {
+						...wasip1Target,
+						sysrootFiles: [
+							{
+								asset: 'sysroot/fmt.a.gz',
+								runtimePath: '/sysroot/fmt.a'
+							},
+							{
+								asset: 'sysroot/runtime.a.gz',
+								runtimePath: '/sysroot/runtime.a'
+							}
+						],
+						sysrootPack: undefined
+					}
+				}
+			},
+			dependencies: {
+				runTool: async (invocation) => {
+					if (invocation.tool === 'compile') {
+						expect(invocation.args).toContain('/workspace/main.go');
+						return {
+							exitCode: 0,
+							outputs: {
+								[invocation.outputPath]: new Uint8Array([1, 2, 3])
+							}
+						};
+					}
+					return {
+						exitCode: 0,
+						outputs: {
+							[invocation.outputPath]: new Uint8Array([0, 97, 115, 109, 1])
+						}
+					};
+				}
+			}
+		});
+
+		const result = await compiler.compile({
+			code: `package main
+
+import "fmt"
+
+func main() {
+	fmt.Println("hello")
+}
+`,
+			target: 'wasip1/wasm'
+		});
+
+		expect(result.success).toBe(true);
+		expect(result.plan?.importcfg).toContain('packagefile fmt=/sysroot/fmt.a');
+		expect(result.plan?.importcfg).toContain('packagefile runtime=/sysroot/runtime.a');
+	});
+
+	it('rejects empty requests early', async () => {
+		const result = await compileGo(
+			{},
+			{
+				manifest: createRuntimeManifest()
+			}
+		);
+
+		expect(result.success).toBe(false);
+		expect(result.stderr).toMatch(
+			/requires either a non-empty Go source string or at least one workspace file/
+		);
+	});
+});

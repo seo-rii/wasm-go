@@ -79,7 +79,12 @@ function toStandaloneBytes(value: string | Uint8Array | ArrayBuffer) {
 	if (typeof value === 'string') {
 		return new TextEncoder().encode(value);
 	}
-	return value instanceof Uint8Array ? new Uint8Array(value) : new Uint8Array(value);
+	if (value instanceof Uint8Array) {
+		const bytes = new Uint8Array(value.byteLength);
+		bytes.set(value);
+		return bytes;
+	}
+	return new Uint8Array(value);
 }
 
 function ensureDirectory(root: Directory, guestPath: string) {
@@ -135,10 +140,16 @@ function readFile(root: Directory, guestPath: string) {
 async function loadSysrootFiles(
 	plan: BrowserGoBuildPlan,
 	runtimeBaseUrl: string | URL,
-	fetchImpl: typeof fetch
+	fetchImpl: typeof fetch,
+	reportAssetProgress?: (asset: string, loaded: number, total?: number) => void
 ) {
 	if (plan.sysrootPack) {
-		return await loadRuntimePackEntries(runtimeBaseUrl, plan.sysrootPack, fetchImpl);
+		return await loadRuntimePackEntries(runtimeBaseUrl, plan.sysrootPack, fetchImpl, {
+			index: (loaded, total) =>
+				reportAssetProgress?.(plan.sysrootPack!.index, loaded, total),
+			asset: (loaded, total) =>
+				reportAssetProgress?.(plan.sysrootPack!.asset, loaded, total)
+		});
 	}
 	return await Promise.all(
 		(plan.sysrootFiles || []).map(async (entry) => ({
@@ -146,7 +157,9 @@ async function loadSysrootFiles(
 			bytes: await fetchRuntimeAssetBytes(
 				resolveVersionedAssetUrl(runtimeBaseUrl, entry.asset),
 				`sysroot asset ${entry.runtimePath}`,
-				fetchImpl
+				fetchImpl,
+				true,
+				(loaded, total) => reportAssetProgress?.(entry.asset, loaded, total)
 			)
 		}))
 	);
@@ -170,11 +183,12 @@ export async function executeGoToolInvocation(
 	invocation: BrowserGoToolInvocation,
 	plan: BrowserGoBuildPlan,
 	runtimeBaseUrl: string | URL,
-	fetchImpl: typeof fetch = fetch
+	fetchImpl: typeof fetch = fetch,
+	reportAssetProgress?: (asset: string, loaded: number, total?: number) => void
 ): Promise<BrowserGoToolResult> {
 	const root = new Directory(new Map());
 	ensureDirectory(root, '/tmp');
-	for (const entry of await loadSysrootFiles(plan, runtimeBaseUrl, fetchImpl)) {
+	for (const entry of await loadSysrootFiles(plan, runtimeBaseUrl, fetchImpl, reportAssetProgress)) {
 		writeFile(root, entry.runtimePath, entry.bytes, true);
 	}
 	for (const file of collectInputFiles(invocation, plan)) {
@@ -184,7 +198,9 @@ export async function executeGoToolInvocation(
 	const toolBytes = await fetchRuntimeAssetBytes(
 		resolveVersionedAssetUrl(runtimeBaseUrl, invocation.toolAsset),
 		`${invocation.tool}.wasm`,
-		fetchImpl
+		fetchImpl,
+		true,
+		(loaded, total) => reportAssetProgress?.(invocation.toolAsset, loaded, total)
 	);
 	const stdout = new CaptureFd();
 	const stderr = new CaptureFd();
@@ -199,7 +215,7 @@ export async function executeGoToolInvocation(
 		],
 		{ debug: false }
 	);
-	const module = await WebAssembly.compile(toolBytes);
+	const module = await WebAssembly.compile(toStandaloneBytes(toolBytes));
 	const instance = await WebAssembly.instantiate(module, {
 		wasi_snapshot_preview1: wasiInstance.wasiImport
 	});

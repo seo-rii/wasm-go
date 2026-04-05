@@ -298,11 +298,17 @@ export function resolveTargetManifest(
 
 export async function loadRuntimeManifest(
 	manifestUrl: string | URL,
-	fetchImpl: typeof fetch = fetch
+	fetchImpl: typeof fetch = fetch,
+	reportProgress?: (loaded: number, total?: number) => void
 ): Promise<NormalizedRuntimeManifest> {
 	try {
 		return normalizeRuntimeManifest(
-			await fetchRuntimeAssetJson(manifestUrl, 'wasm-go runtime manifest', fetchImpl)
+			await fetchRuntimeAssetJson(
+				manifestUrl,
+				'wasm-go runtime manifest',
+				fetchImpl,
+				reportProgress
+			)
 		);
 	} catch (error) {
 		throw new Error(

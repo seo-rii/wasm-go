@@ -62,7 +62,12 @@ function createRuntimeFetch(): typeof fetch {
 
 export interface CompileGoDependencies {
 	loadManifest?: typeof loadRuntimeManifest;
-	runTool?: (invocation: BrowserGoToolInvocation) => Promise<BrowserGoToolResult>;
+	runTool?: (
+		invocation: BrowserGoToolInvocation,
+		context?: {
+			reportAssetProgress?: (asset: string, loaded: number, total?: number) => void;
+		}
+	) => Promise<BrowserGoToolResult>;
 	fetchImpl?: typeof fetch;
 }
 
@@ -97,7 +102,8 @@ function normalizeToolOutputs(outputs: BrowserGoToolResult['outputs']) {
 
 async function resolveCompilerRuntime(
 	options: CreateGoCompilerOptions | PreloadBrowserGoRuntimeOptions,
-	dependencies: CompileGoDependencies = {}
+	dependencies: CompileGoDependencies = {},
+	reportManifestProgress?: (loaded: number, total?: number) => void
 ) {
 	const runtimeBaseUrl = options.runtimeBaseUrl || DEFAULT_RUNTIME_BASE_URL;
 	if (options.manifest) {
@@ -110,7 +116,8 @@ async function resolveCompilerRuntime(
 	return {
 		manifest: await (dependencies.loadManifest || loadRuntimeManifest)(
 			manifestUrl,
-			dependencies.fetchImpl
+			dependencies.fetchImpl,
+			reportManifestProgress
 		),
 		runtimeBaseUrl: options.runtimeBaseUrl || new URL('./', manifestUrl.toString())
 	};
@@ -130,10 +137,10 @@ function createProgressEmitter(request: BrowserGoCompileRequest) {
 		const safeTotal = Math.max(1, total);
 		const safeCompleted = Math.max(0, Math.min(completed, safeTotal));
 		const stageRanges: Record<BrowserGoCompileProgress['stage'], readonly [number, number]> = {
-			manifest: [0, 15],
-			plan: [15, 35],
-			compile: [35, 75],
-			link: [75, 95],
+			manifest: [0, 8],
+			plan: [8, 20],
+			compile: [20, 88],
+			link: [88, 97],
 			done: [100, 100]
 		};
 		const [start, end] = stageRanges[stage];
@@ -168,6 +175,41 @@ function createLogBuffer(enabled: boolean) {
 				message
 			});
 		}
+	};
+}
+
+function createStageAssetProgressReporter(
+	stage: Exclude<BrowserGoCompileProgress['stage'], 'done'>,
+	progress: ReturnType<typeof createProgressEmitter>,
+	stageAssetShare: number
+) {
+	const assets = new Map<string, { loaded: number; total?: number }>();
+	return (asset: string, loaded: number, total?: number) => {
+		const entry = assets.get(asset) || { loaded: 0, total: undefined };
+		entry.loaded = Math.max(entry.loaded, loaded);
+		if (typeof total === 'number' && total > 0) {
+			entry.total = Math.max(entry.total ?? 0, total);
+		}
+		assets.set(asset, entry);
+		let weightedLoaded = 0;
+		let weightedTotal = 0;
+		for (const progressEntry of assets.values()) {
+			if (typeof progressEntry.total === 'number' && progressEntry.total > 0) {
+				weightedLoaded += Math.min(progressEntry.loaded, progressEntry.total);
+				weightedTotal += progressEntry.total;
+				continue;
+			}
+			weightedLoaded += progressEntry.loaded > 0 ? 1 : 0;
+			weightedTotal += 1;
+		}
+		const fraction = weightedTotal > 0 ? weightedLoaded / weightedTotal : 0;
+		const assetLabel = asset.split('/').at(-1) || asset;
+		progress(
+			stage,
+			Math.min(stageAssetShare, fraction * stageAssetShare),
+			1,
+			`loading ${assetLabel}`
+		);
 	};
 }
 
@@ -256,7 +298,8 @@ async function resolveAutoDependencies(
 	manifest: NormalizedRuntimeManifest,
 	runtimeBaseUrl: string | URL,
 	request: BrowserGoCompileRequest,
-	fetchImpl: typeof fetch
+	fetchImpl: typeof fetch,
+	reportAssetProgress?: (asset: string, loaded: number, total?: number) => void
 ) {
 	if (request.dependencies && request.dependencies.length > 0) {
 		return request.dependencies;
@@ -271,7 +314,12 @@ async function resolveAutoDependencies(
 			.filter((entry): entry is NonNullable<typeof entry> => entry !== null);
 	}
 	if (target.sysrootPack) {
-		const index = await loadRuntimePackIndex(runtimeBaseUrl, target.sysrootPack, fetchImpl);
+		const index = await loadRuntimePackIndex(
+			runtimeBaseUrl,
+			target.sysrootPack,
+			fetchImpl,
+			(loaded, total) => reportAssetProgress?.(target.sysrootPack!.index, loaded, total)
+		);
 		return index.entries
 			.map((entry) => createSysrootDependency(entry.runtimePath))
 			.filter((entry): entry is NonNullable<typeof entry> => entry !== null);
@@ -283,7 +331,8 @@ async function resolveCompileRequest(
 	request: BrowserGoCompileRequest,
 	manifest: NormalizedRuntimeManifest,
 	runtimeBaseUrl: string | URL,
-	fetchImpl: typeof fetch
+	fetchImpl: typeof fetch,
+	reportAssetProgress?: (asset: string, loaded: number, total?: number) => void
 ) {
 	const validationError = validateCompileRequest(request);
 	if (validationError) {
@@ -297,7 +346,13 @@ async function resolveCompileRequest(
 			target: normalizeRequestedTarget(request),
 			files: normalizeCompileRequestSource(request),
 			packageImportPath: normalizePackageImportPath(request),
-			dependencies: await resolveAutoDependencies(manifest, runtimeBaseUrl, request, fetchImpl)
+			dependencies: await resolveAutoDependencies(
+				manifest,
+				runtimeBaseUrl,
+				request,
+				fetchImpl,
+				reportAssetProgress
+			)
 		} satisfies BrowserGoCompileRequest
 	} as const;
 }
@@ -310,27 +365,103 @@ export async function compileGo(
 	const fetchImpl = dependencies.fetchImpl || createRuntimeFetch();
 	const progress = createProgressEmitter(request);
 	const logs = createLogBuffer(Boolean(request.log));
+	const emitManifestAssetProgress = createStageAssetProgressReporter('manifest', progress, 1);
+	const reportManifestAssetProgress = (loaded: number, total?: number) =>
+		emitManifestAssetProgress('runtime-manifest.v1.json', loaded, total);
+	const reportPlanAssetProgress = createStageAssetProgressReporter('plan', progress, 0.45);
 	progress('manifest', 0, 1, 'loading runtime manifest');
 	const { manifest, runtimeBaseUrl } = await resolveCompilerRuntime(options, {
 		...dependencies,
 		fetchImpl
-	});
+	}, reportManifestAssetProgress);
 	progress('manifest', 1, 1, `loaded runtime manifest for ${manifest.defaultTarget}`);
-	const resolvedRequest = await resolveCompileRequest(request, manifest, runtimeBaseUrl, fetchImpl);
+	progress('plan', 0, 1, 'resolving compile inputs');
+	const resolvedRequest = await resolveCompileRequest(
+		request,
+		manifest,
+		runtimeBaseUrl,
+		fetchImpl,
+		reportPlanAssetProgress
+	);
 	if ('error' in resolvedRequest) {
 		return failure(resolvedRequest.error || 'invalid compile request', logs.records);
 	}
-	progress('plan', 0, 1, 'building compile plan');
+	progress('plan', 0.5, 1, 'building compile plan');
 	const plan = createBrowserGoBuildPlan(resolvedRequest.request, manifest);
 	logs.push(
 		`[wasm-go] plan target=${plan.target} package=${plan.packageImportPath} kind=${plan.packageKind}`
 	);
 	progress('plan', 1, 1, 'compile plan ready');
+	const useDetailedRuntimeProgress = true;
+	let compileStageExecutionFraction = 0;
+	const compileStageFractions = new Map<string, number>();
+	const compileStageWeights = new Map<string, number>();
+	if (plan.sysrootPack) {
+		compileStageFractions.set(plan.sysrootPack.index, 0);
+		compileStageWeights.set(plan.sysrootPack.index, 0.04);
+		compileStageFractions.set(plan.sysrootPack.asset, 0);
+		compileStageWeights.set(plan.sysrootPack.asset, 0.56);
+	} else if (plan.sysrootFiles?.length) {
+		const sysrootWeight = 0.6 / plan.sysrootFiles.length;
+		for (const entry of plan.sysrootFiles) {
+			compileStageFractions.set(entry.asset, 0);
+			compileStageWeights.set(entry.asset, sysrootWeight);
+		}
+	}
+	compileStageFractions.set(plan.compile.toolAsset, 0);
+	compileStageWeights.set(
+		plan.compile.toolAsset,
+		plan.sysrootPack || plan.sysrootFiles?.length ? 0.18 : 0.45
+	);
+	const compileStageExecutionWeight =
+		plan.sysrootPack || plan.sysrootFiles?.length ? 0.22 : 0.55;
+	const emitCompileStage = (message: string) => {
+		let completed = compileStageExecutionFraction * compileStageExecutionWeight;
+		for (const [asset, fraction] of compileStageFractions) {
+			completed += fraction * (compileStageWeights.get(asset) || 0);
+		}
+		progress('compile', completed, 1, message);
+	};
+	const updateCompileAssetProgress = (asset: string, loaded: number, total?: number) => {
+		if (!compileStageFractions.has(asset)) return;
+		const fraction = total && total > 0 ? Math.min(loaded / total, 1) : loaded > 0 ? 1 : 0;
+		compileStageFractions.set(asset, fraction);
+		emitCompileStage(`loading ${asset.split('/').at(-1) || asset}`);
+	};
+	let linkStageExecutionFraction = 0;
+	const linkStageFractions = new Map<string, number>();
+	const linkStageWeights = new Map<string, number>();
+	if (plan.link) {
+		linkStageFractions.set(plan.link.toolAsset, 0);
+		linkStageWeights.set(plan.link.toolAsset, 0.55);
+	}
+	const linkStageExecutionWeight = 0.45;
+	const emitLinkStage = (message: string) => {
+		let completed = linkStageExecutionFraction * linkStageExecutionWeight;
+		for (const [asset, fraction] of linkStageFractions) {
+			completed += fraction * (linkStageWeights.get(asset) || 0);
+		}
+		progress('link', completed, 1, message);
+	};
+	const updateLinkAssetProgress = (asset: string, loaded: number, total?: number) => {
+		if (!linkStageFractions.has(asset)) return;
+		const fraction = total && total > 0 ? Math.min(loaded / total, 1) : loaded > 0 ? 1 : 0;
+		linkStageFractions.set(asset, fraction);
+		emitLinkStage(`loading ${asset.split('/').at(-1) || asset}`);
+	};
 	const runTool =
 		dependencies.runTool ||
 		(!options.manifest
-			? ((invocation: BrowserGoToolInvocation) =>
-					executeGoToolInvocation(invocation, plan, runtimeBaseUrl, fetchImpl))
+			? ((invocation: BrowserGoToolInvocation, context?: {
+					reportAssetProgress?: (asset: string, loaded: number, total?: number) => void;
+				}) =>
+					executeGoToolInvocation(
+						invocation,
+						plan,
+						runtimeBaseUrl,
+						fetchImpl,
+						context?.reportAssetProgress
+					))
 			: undefined);
 	if (!runTool) {
 		return failure(
@@ -339,10 +470,22 @@ export async function compileGo(
 			plan
 		);
 	}
-	progress('compile', 0, 1, 'running compile');
+	if (useDetailedRuntimeProgress) {
+		emitCompileStage('preparing compile runtime');
+	} else {
+		progress('compile', 0, 1, 'running compile');
+	}
 	logs.push(`[wasm-go] compile ${plan.compile.args.join(' ')}`);
-	const compileResult = await runTool(plan.compile);
+	const compileResult = await runTool(plan.compile, {
+		reportAssetProgress: updateCompileAssetProgress
+	});
 	const compileOutputs = normalizeToolOutputs(compileResult.outputs);
+	if (useDetailedRuntimeProgress) {
+		compileStageExecutionFraction = 1;
+		emitCompileStage('compile finished');
+	} else {
+		progress('compile', 1, 1, 'compile finished');
+	}
 	if (compileResult.exitCode !== 0) {
 		return failure(
 			compileResult.stderr || 'go compile failed',
@@ -378,7 +521,11 @@ export async function compileGo(
 			stderr
 		);
 	}
-	progress('link', 0, 1, 'running link');
+	if (useDetailedRuntimeProgress) {
+		emitLinkStage('preparing link runtime');
+	} else {
+		progress('link', 0, 1, 'running link');
+	}
 	logs.push(`[wasm-go] link ${plan.link.args.join(' ')}`);
 	const linkInputs = {
 		...plan.link,
@@ -390,8 +537,16 @@ export async function compileGo(
 			}
 		]
 	};
-	const linkResult = await runTool(linkInputs);
+	const linkResult = await runTool(linkInputs, {
+		reportAssetProgress: updateLinkAssetProgress
+	});
 	const linkOutputs = normalizeToolOutputs(linkResult.outputs);
+	if (useDetailedRuntimeProgress) {
+		linkStageExecutionFraction = 1;
+		emitLinkStage('link finished');
+	} else {
+		progress('link', 1, 1, 'link finished');
+	}
 	stdout += linkResult.stdout || '';
 	stderr += linkResult.stderr || '';
 	if (linkResult.exitCode !== 0) {
@@ -403,6 +558,7 @@ export async function compileGo(
 			parseCompilerDiagnostics(linkResult.stderr || stdout)
 		);
 	}
+	progress('link', 1, 1, 'link finished');
 	const linkedArtifact = linkOutputs[plan.link.outputPath];
 	if (!linkedArtifact) {
 		return failure(
@@ -412,7 +568,6 @@ export async function compileGo(
 			stdout
 		);
 	}
-	progress('link', 1, 1, 'link finished');
 	progress('done', 1, 1, 'artifact ready');
 	return success(
 		{

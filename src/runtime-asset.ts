@@ -7,6 +7,7 @@ import type {
 
 const runtimePackBytesCache = new Map<string, Promise<Uint8Array>>();
 const runtimePackIndexCache = new Map<string, Promise<RuntimePackIndex>>();
+type RuntimeAssetProgressReporter = (loaded: number, total?: number) => void;
 
 function expectObject(value: unknown, label: string): Record<string, unknown> {
 	if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -86,7 +87,8 @@ export async function fetchRuntimeAssetBytes(
 	assetUrl: string | URL,
 	assetLabel: string,
 	fetchImpl: typeof fetch = fetch,
-	allowCompressedFallback = true
+	allowCompressedFallback = true,
+	reportProgress?: RuntimeAssetProgressReporter
 ) {
 	const resolvedAssetUrl = assetUrl.toString();
 	const resolvedAssetUrlObject = new URL(resolvedAssetUrl);
@@ -98,7 +100,32 @@ export async function fetchRuntimeAssetBytes(
 			`failed to fetch ${assetLabel} from ${resolvedAssetUrl}: ${error instanceof Error ? error.message : String(error)}. This usually means the browser loaded a stale wasm-go bundle or blocked a nested runtime asset request; hard refresh and resync the runtime assets.`
 		);
 	}
-	const assetBytes = new Uint8Array(await response.arrayBuffer());
+	let assetBytes: Uint8Array;
+	if (!response.body) {
+		assetBytes = new Uint8Array(await response.arrayBuffer());
+		reportProgress?.(assetBytes.byteLength, assetBytes.byteLength);
+	} else {
+		const reader = response.body.getReader();
+		const contentLength = Number(response.headers.get('content-length') || 0) || undefined;
+		let receivedLength = 0;
+		const chunks: Uint8Array[] = [];
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			if (!value) continue;
+			const chunk = Uint8Array.from(value);
+			chunks.push(chunk);
+			receivedLength += chunk.byteLength;
+			reportProgress?.(receivedLength, contentLength);
+		}
+		assetBytes = new Uint8Array(receivedLength);
+		let position = 0;
+		for (const chunk of chunks) {
+			assetBytes.set(chunk, position);
+			position += chunk.byteLength;
+		}
+		reportProgress?.(receivedLength, contentLength ?? receivedLength);
+	}
 	const assetPreview = new TextDecoder()
 		.decode(assetBytes.slice(0, 128))
 		.replace(/^\uFEFF/, '')
@@ -117,7 +144,13 @@ export async function fetchRuntimeAssetBytes(
 		const compressedAssetUrl = new URL(resolvedAssetUrl);
 		compressedAssetUrl.pathname = `${compressedAssetUrl.pathname}.gz`;
 		try {
-			return await fetchRuntimeAssetBytes(compressedAssetUrl, assetLabel, fetchImpl, false);
+			return await fetchRuntimeAssetBytes(
+				compressedAssetUrl,
+				assetLabel,
+				fetchImpl,
+				false,
+				reportProgress
+			);
 		} catch {}
 	}
 	if (!response.ok) {
@@ -142,8 +175,10 @@ export async function fetchRuntimeAssetBytes(
 		);
 	}
 	try {
+		const compressedBytes = new Uint8Array(assetBytes.byteLength);
+		compressedBytes.set(assetBytes);
 		const decompressedResponse = new Response(
-			new Blob([assetBytes]).stream().pipeThrough(new DecompressionStream('gzip'))
+			new Blob([compressedBytes.buffer]).stream().pipeThrough(new DecompressionStream('gzip'))
 		);
 		return new Uint8Array(await decompressedResponse.arrayBuffer());
 	} catch (error) {
@@ -156,22 +191,33 @@ export async function fetchRuntimeAssetBytes(
 export async function fetchRuntimeAssetJson<T>(
 	assetUrl: string | URL,
 	assetLabel: string,
-	fetchImpl: typeof fetch = fetch
+	fetchImpl: typeof fetch = fetch,
+	reportProgress?: RuntimeAssetProgressReporter
 ): Promise<T> {
 	return JSON.parse(
-		new TextDecoder().decode(await fetchRuntimeAssetBytes(assetUrl, assetLabel, fetchImpl))
+		new TextDecoder().decode(
+			await fetchRuntimeAssetBytes(assetUrl, assetLabel, fetchImpl, true, reportProgress)
+		)
 	) as T;
 }
 
 async function loadRuntimePackBytes(
 	baseUrl: string | URL,
 	pack: RuntimeAssetPackReference,
-	fetchImpl: typeof fetch
+	fetchImpl: typeof fetch,
+	reportProgress?: RuntimeAssetProgressReporter
 ) {
 	const assetUrl = resolveVersionedAssetUrl(baseUrl, pack.asset).toString();
 	let cached = runtimePackBytesCache.get(assetUrl);
+	const reusedCachedBytes = Boolean(cached);
 	if (!cached) {
-		cached = fetchRuntimeAssetBytes(assetUrl, `wasm-go runtime pack ${pack.asset}`, fetchImpl);
+		cached = fetchRuntimeAssetBytes(
+			assetUrl,
+			`wasm-go runtime pack ${pack.asset}`,
+			fetchImpl,
+			true,
+			reportProgress
+		);
 		runtimePackBytesCache.set(assetUrl, cached);
 		cached.catch(() => {
 			if (runtimePackBytesCache.get(assetUrl) === cached) {
@@ -179,21 +225,28 @@ async function loadRuntimePackBytes(
 			}
 		});
 	}
-	return cached;
+	const bytes = await cached;
+	if (reusedCachedBytes) {
+		reportProgress?.(bytes.byteLength, bytes.byteLength);
+	}
+	return bytes;
 }
 
 export async function loadRuntimePackIndex(
 	baseUrl: string | URL,
 	pack: RuntimeAssetPackReference,
-	fetchImpl: typeof fetch = fetch
+	fetchImpl: typeof fetch = fetch,
+	reportProgress?: RuntimeAssetProgressReporter
 ) {
 	const indexUrl = resolveVersionedAssetUrl(baseUrl, pack.index).toString();
 	let cached = runtimePackIndexCache.get(indexUrl);
+	const reusedCachedIndex = Boolean(cached);
 	if (!cached) {
 		cached = fetchRuntimeAssetJson<unknown>(
 			indexUrl,
 			`wasm-go runtime pack index ${pack.index}`,
-			fetchImpl
+			fetchImpl,
+			reportProgress
 		).then((value) => parseRuntimePackIndex(value));
 		runtimePackIndexCache.set(indexUrl, cached);
 		cached.catch(() => {
@@ -202,17 +255,25 @@ export async function loadRuntimePackIndex(
 			}
 		});
 	}
-	return cached;
+	const index = await cached;
+	if (reusedCachedIndex) {
+		reportProgress?.(index.fileCount, index.fileCount);
+	}
+	return index;
 }
 
 export async function loadRuntimePackEntries(
 	baseUrl: string | URL,
 	pack: RuntimeAssetPackReference,
-	fetchImpl: typeof fetch = fetch
+	fetchImpl: typeof fetch = fetch,
+	reportProgress?: {
+		index?: RuntimeAssetProgressReporter;
+		asset?: RuntimeAssetProgressReporter;
+	}
 ) {
 	const [index, bytes] = await Promise.all([
-		loadRuntimePackIndex(baseUrl, pack, fetchImpl),
-		loadRuntimePackBytes(baseUrl, pack, fetchImpl)
+		loadRuntimePackIndex(baseUrl, pack, fetchImpl, reportProgress?.index),
+		loadRuntimePackBytes(baseUrl, pack, fetchImpl, reportProgress?.asset)
 	]);
 	return index.entries.map((entry) => ({
 		runtimePath: entry.runtimePath,

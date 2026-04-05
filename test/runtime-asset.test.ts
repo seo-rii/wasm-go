@@ -76,4 +76,36 @@ describe('runtime assets', () => {
 			)
 		).rejects.toThrow(/expected a wasm-go runtime asset but got HTML instead/);
 	});
+
+	it('reports incremental download progress for streamed runtime assets', async () => {
+		const updates: Array<[number, number | undefined]> = [];
+		const bytes = await fetchRuntimeAssetBytes(
+			'https://example.invalid/tools/compile.wasm',
+			'compile.wasm',
+			async () =>
+				new Response(
+					new ReadableStream({
+						start(controller) {
+							controller.enqueue(new Uint8Array([1, 2]));
+							controller.enqueue(new Uint8Array([3, 4]));
+							controller.close();
+						}
+					}),
+					{
+						headers: {
+							'content-length': '4'
+						}
+					}
+				),
+			true,
+			(loaded, total) => updates.push([loaded, total])
+		);
+
+		expect(Array.from(bytes)).toEqual([1, 2, 3, 4]);
+		expect(updates).toEqual([
+			[2, 4],
+			[4, 4],
+			[4, 4]
+		]);
+	});
 });

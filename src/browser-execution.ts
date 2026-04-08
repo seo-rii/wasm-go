@@ -1,7 +1,6 @@
 import {
 	Directory,
 	Fd,
-	File,
 	Inode,
 	OpenFile,
 	PreopenDirectory,
@@ -10,6 +9,7 @@ import {
 } from '@bjorn3/browser_wasi_shim';
 
 import type { BrowserGoArtifact, BrowserGoSourceFile } from './types.js';
+import { CaptureFd, toStandaloneBytes, writeGuestFile } from './wasi-guest.js';
 
 export interface BrowserExecutionResult {
 	exitCode: number | null;
@@ -33,76 +33,6 @@ export interface BrowserWasiHost {
 	rootDirectory: Directory;
 	stdout: CaptureFd;
 	stderr: CaptureFd;
-}
-
-function normalizeGuestPath(path: string) {
-	const normalized = path.replace(/\\/g, '/');
-	const absolute = normalized.startsWith('/') ? normalized : `/${normalized}`;
-	const segments: string[] = [];
-	for (const segment of absolute.split('/')) {
-		if (!segment || segment === '.') {
-			continue;
-		}
-		if (segment === '..') {
-			throw new Error(`wasm-go does not allow guest path traversal: ${path}`);
-		}
-		segments.push(segment);
-	}
-	return `/${segments.join('/')}`;
-}
-
-function toStandaloneBytes(value: string | Uint8Array | ArrayBuffer) {
-	if (typeof value === 'string') {
-		return new TextEncoder().encode(value);
-	}
-	return value instanceof Uint8Array ? new Uint8Array(value) : new Uint8Array(value);
-}
-
-export class CaptureFd extends Fd {
-	ino = Inode.issue_ino();
-	private readonly decoder = new TextDecoder();
-	private readonly chunks: string[] = [];
-	private readonly output: ((chunk: string) => void) | undefined;
-
-	constructor(output?: (chunk: string) => void) {
-		super();
-		this.output = output;
-	}
-
-	fd_filestat_get() {
-		return {
-			ret: wasi.ERRNO_SUCCESS,
-			filestat: new wasi.Filestat(this.ino, wasi.FILETYPE_CHARACTER_DEVICE, 0n)
-		};
-	}
-
-	fd_fdstat_get() {
-		const fdstat = new wasi.Fdstat(wasi.FILETYPE_CHARACTER_DEVICE, 0);
-		fdstat.fs_rights_base = BigInt(wasi.RIGHTS_FD_WRITE);
-		return {
-			ret: wasi.ERRNO_SUCCESS,
-			fdstat
-		};
-	}
-
-	fd_write(data: Uint8Array) {
-		const chunk = this.decoder.decode(data, { stream: true });
-		this.chunks.push(chunk);
-		this.output?.(chunk);
-		return {
-			ret: wasi.ERRNO_SUCCESS,
-			nwritten: data.byteLength
-		};
-	}
-
-	getText() {
-		const trailing = this.decoder.decode();
-		if (trailing) {
-			this.chunks.push(trailing);
-			this.output?.(trailing);
-		}
-		return this.chunks.join('');
-	}
 }
 
 class BufferedExecutionInput {
@@ -168,20 +98,7 @@ class StdinFd extends Fd {
 export function createBrowserWasiHost(options: BrowserExecutionOptions = {}): BrowserWasiHost {
 	const rootDirectory = new Directory(new Map());
 	for (const file of options.files || []) {
-		const guestPath = normalizeGuestPath(file.path);
-		const segments = guestPath.slice(1).split('/');
-		let directory = rootDirectory;
-		for (const segment of segments.slice(0, -1)) {
-			const existing = directory.contents.get(segment);
-			if (existing instanceof Directory) {
-				directory = existing;
-				continue;
-			}
-			const nextDirectory = new Directory(new Map());
-			directory.contents.set(segment, nextDirectory);
-			directory = nextDirectory;
-		}
-		directory.contents.set(segments.at(-1)!, new File(toStandaloneBytes(file.contents)));
+		writeGuestFile(rootDirectory, file.path, file.contents);
 	}
 	const stdin = new BufferedExecutionInput(options.stdin);
 	const stdout = new CaptureFd(options.stdout);

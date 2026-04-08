@@ -69,6 +69,36 @@ describe('runtime assets', () => {
 		]);
 	});
 
+	it('rejects truncated packed runtime payloads before slicing entries', async () => {
+		await expect(
+			loadRuntimePackEntries(
+				'https://example.invalid/runtime/',
+				{
+					index: 'sysroot/wasip1.index.json',
+					asset: 'sysroot/wasip1.pack',
+					fileCount: 2,
+					totalBytes: 6
+				},
+				async (url) => {
+					if (String(url).endsWith('.index.json')) {
+						return new Response(
+							JSON.stringify({
+								format: 'wasm-go-runtime-pack-index-v1',
+								fileCount: 2,
+								totalBytes: 6,
+								entries: [
+									{ runtimePath: '/sysroot/fmt.a', offset: 0, length: 3 },
+									{ runtimePath: '/sysroot/runtime.a', offset: 3, length: 3 }
+								]
+							})
+						);
+					}
+					return new Response(new Uint8Array([1, 2, 3, 4]));
+				}
+			)
+		).rejects.toThrow(/expected 6 bytes but loaded 4/);
+	});
+
 	it('rejects html responses masquerading as assets', async () => {
 		await expect(
 			fetchRuntimeAssetBytes('https://example.invalid/tools/compile.wasm', 'compile.wasm', async () =>

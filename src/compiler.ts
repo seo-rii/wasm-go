@@ -7,6 +7,7 @@ import {
 } from './runtime-asset.js';
 import { executeGoToolInvocation } from './tool-runtime.js';
 import {
+	collectCompilerDiagnosticText,
 	createSysrootDependency,
 	normalizeCompileRequestSource,
 	normalizePackageImportPath,
@@ -465,7 +466,9 @@ export async function compileGo(
 			: undefined);
 	if (!runTool) {
 		return failure(
-			'wasm-go phase 0-1 scaffolding is ready, but compile.wasm/link.wasm execution is not wired yet. Provide dependencies.runTool to execute the generated build plan.',
+			options.manifest
+				? 'wasm-go can plan against a custom manifest, but custom manifests are not executed by the bundled runtime path yet. Provide dependencies.runTool to execute the generated build plan.'
+				: 'wasm-go phase 0-1 scaffolding is ready, but compile.wasm/link.wasm execution is not wired yet. Provide dependencies.runTool to execute the generated build plan.',
 			logs.records,
 			plan
 		);
@@ -492,7 +495,9 @@ export async function compileGo(
 			logs.records,
 			plan,
 			compileResult.stdout,
-			parseCompilerDiagnostics(compileResult.stdout || compileResult.stderr)
+			parseCompilerDiagnostics(
+				collectCompilerDiagnosticText(compileResult.stderr, compileResult.stdout)
+			)
 		);
 	}
 	progress('compile', 1, 1, 'compile finished');
@@ -521,6 +526,15 @@ export async function compileGo(
 			stderr
 		);
 	}
+	const compileArchive = compileOutputs[plan.compile.outputPath];
+	if (!compileArchive) {
+		return failure(
+			`compile completed without producing ${plan.compile.outputPath}`,
+			logs.records,
+			plan,
+			stdout
+		);
+	}
 	if (useDetailedRuntimeProgress) {
 		emitLinkStage('preparing link runtime');
 	} else {
@@ -533,7 +547,7 @@ export async function compileGo(
 			...plan.link.inputFiles,
 			{
 				path: plan.compile.outputPath,
-				contents: compileOutputs[plan.compile.outputPath]!
+				contents: compileArchive
 			}
 		]
 	};
@@ -555,7 +569,9 @@ export async function compileGo(
 			logs.records,
 			plan,
 			stdout,
-			parseCompilerDiagnostics(linkResult.stderr || stdout)
+			parseCompilerDiagnostics(
+				collectCompilerDiagnosticText(linkResult.stderr, linkResult.stdout)
+			)
 		);
 	}
 	progress('link', 1, 1, 'link finished');

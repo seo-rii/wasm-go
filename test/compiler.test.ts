@@ -15,7 +15,8 @@ describe('compiler facade', () => {
 
 		expect(result.success).toBe(false);
 		expect(result.plan?.compile.tool).toBe('compile');
-		expect(result.stderr).toMatch(/phase 0-1 scaffolding is ready/);
+		expect(result.stderr).toMatch(/custom manifest/);
+		expect(result.stderr).toMatch(/dependencies.runTool/);
 	});
 
 	it('runs compile and link invocations through an injected runner', async () => {
@@ -85,6 +86,55 @@ describe('compiler facade', () => {
 			expect(result.artifact?.target).toBe(target);
 			expect(result.artifact?.format).toBe('wasi-core-wasm');
 		}
+	});
+
+	it('fails early when compile succeeds without emitting the main archive', async () => {
+		const invocations: string[] = [];
+		const result = await compileGo(createCompileRequest(), {
+			manifest: createRuntimeManifest(),
+			dependencies: {
+				runTool: async (invocation) => {
+					invocations.push(invocation.tool);
+					return {
+						exitCode: 0,
+						stdout: 'compile ok\n',
+						outputs: {}
+					};
+				}
+			}
+		});
+
+		expect(result.success).toBe(false);
+		expect(result.stderr).toContain('/workspace/pkg/main.a');
+		expect(invocations).toEqual(['compile']);
+	});
+
+	it('prefers stderr when parsing compile diagnostics', async () => {
+		const result = await compileGo(createCompileRequest(), {
+			manifest: createRuntimeManifest(),
+			dependencies: {
+				runTool: async () => ({
+					exitCode: 1,
+					stdout: 'stdout banner\n',
+					stderr: 'main.go:5:2: undefined: fmtx\n'
+				})
+			}
+		});
+
+		expect(result.success).toBe(false);
+		expect(result.diagnostics).toEqual([
+			{
+				fileName: 'main.go',
+				lineNumber: 5,
+				columnNumber: 2,
+				severity: 'error',
+				message: 'undefined: fmtx'
+			},
+			{
+				severity: 'error',
+				message: 'stdout banner'
+			}
+		]);
 	});
 
 	it('returns go archives for library builds', async () => {

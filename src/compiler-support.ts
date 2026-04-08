@@ -90,6 +90,13 @@ export function parseCompilerDiagnostics(stderr: string | undefined): CompilerDi
 	return diagnostics;
 }
 
+export function collectCompilerDiagnosticText(stderr?: string, stdout?: string) {
+	const parts = [stderr, stdout]
+		.map((value) => value?.trim())
+		.filter((value): value is string => Boolean(value));
+	return parts.length > 0 ? parts.join('\n') : undefined;
+}
+
 export function createSysrootDependency(runtimePath: string): GoPackageArchive | null {
 	if (!runtimePath.startsWith('/sysroot/') || !runtimePath.endsWith('.a')) {
 		return null;

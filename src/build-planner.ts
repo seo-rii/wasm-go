@@ -58,12 +58,23 @@ function createEnvironmentMap(envEntries: string[]) {
 	return Object.fromEntries(env);
 }
 
+function compareGoPackageArchives(left: GoPackageArchive, right: GoPackageArchive) {
+	return (
+		left.importPath.localeCompare(right.importPath) ||
+		(left.replaceImportPath || '').localeCompare(right.replaceImportPath || '') ||
+		left.archivePath.localeCompare(right.archivePath)
+	);
+}
+
+function normalizeDependencies(dependencies: GoPackageArchive[]) {
+	return [...dependencies]
+		.map((dependency) => ({ ...dependency }))
+		.sort(compareGoPackageArchives);
+}
+
 function createImportConfig(dependencies: GoPackageArchive[]) {
 	const lines: string[] = [];
-	const sorted = [...dependencies].sort((left, right) =>
-		left.importPath.localeCompare(right.importPath)
-	);
-	for (const dependency of sorted) {
+	for (const dependency of dependencies) {
 		if (dependency.replaceImportPath) {
 			lines.push(`importmap ${dependency.importPath}=${dependency.replaceImportPath}`);
 			lines.push(`packagefile ${dependency.replaceImportPath}=${dependency.archivePath}`);
@@ -74,28 +85,38 @@ function createImportConfig(dependencies: GoPackageArchive[]) {
 	return lines.join('\n');
 }
 
-function createEmbedConfig(embeds: GoEmbedPattern[], workspaceRoot: string) {
+interface NormalizedEmbedPattern {
+	pattern: string;
+	files: Array<{
+		path: string;
+		sourcePath: string;
+	}>;
+}
+
+function normalizeEmbeds(embeds: GoEmbedPattern[], workspaceRoot: string): NormalizedEmbedPattern[] {
+	return [...embeds]
+		.map((entry) => ({
+			pattern: entry.pattern,
+			files: [...entry.files]
+				.map((file) => ({
+					path: normalizeWorkspacePath(file.path),
+					sourcePath: file.sourcePath || createAbsoluteWorkspacePath(workspaceRoot, file.path)
+				}))
+				.sort(
+					(left, right) =>
+						left.path.localeCompare(right.path) ||
+						left.sourcePath.localeCompare(right.sourcePath)
+				)
+		}))
+		.sort((left, right) => left.pattern.localeCompare(right.pattern));
+}
+
+function createEmbedConfig(embeds: NormalizedEmbedPattern[]) {
 	const patterns = Object.fromEntries(
-		[...embeds]
-			.sort((left, right) => left.pattern.localeCompare(right.pattern))
-			.map((entry) => [
-				entry.pattern,
-				[...entry.files]
-					.map((file) => normalizeWorkspacePath(file.path))
-					.sort((left, right) => left.localeCompare(right))
-			])
+		embeds.map((entry) => [entry.pattern, entry.files.map((file) => file.path)])
 	);
 	const files = Object.fromEntries(
-		[...embeds]
-			.sort((left, right) => left.pattern.localeCompare(right.pattern))
-			.flatMap((entry) =>
-				[...entry.files]
-					.sort((left, right) => left.path.localeCompare(right.path))
-					.map((file) => [
-						normalizeWorkspacePath(file.path),
-						file.sourcePath || createAbsoluteWorkspacePath(workspaceRoot, file.path)
-					] as const)
-			)
+		embeds.flatMap((entry) => entry.files.map((file) => [file.path, file.sourcePath] as const))
 	);
 	return JSON.stringify(
 		{
@@ -152,14 +173,16 @@ export function createBrowserGoBuildPlan(
 	};
 	const targetConfig = resolveTargetManifest(manifest, normalizeRequestedTarget(normalizedRequest));
 	const sourceFiles = normalizeSourceFiles(normalizedFiles);
-	const dependencies = normalizedRequest.dependencies || [];
+	const dependencies = normalizeDependencies(normalizedRequest.dependencies || []);
 	const packageKind = normalizedRequest.packageKind || 'main';
 	const workspaceRoot = targetConfig.planner.workspaceRoot.replace(/\/+$/, '');
 	const importcfg = createImportConfig(dependencies);
-	const embedcfg =
+	const normalizedEmbeds =
 		normalizedRequest.embeds && normalizedRequest.embeds.length > 0
-			? createEmbedConfig(normalizedRequest.embeds, workspaceRoot)
-			: undefined;
+			? normalizeEmbeds(normalizedRequest.embeds, workspaceRoot)
+			: [];
+	const embedcfg =
+		normalizedEmbeds.length > 0 ? createEmbedConfig(normalizedEmbeds) : undefined;
 	const generatedFiles: BrowserGoGeneratedFile[] = [
 		buildGeneratedFile(targetConfig.planner.importcfgPath, importcfg)
 	];
@@ -209,8 +232,7 @@ export function createBrowserGoBuildPlan(
 		args: compileArgs,
 		env,
 		inputFiles: compileInputFiles,
-		outputPath: compileOutputPath,
-		timeoutMs: manifest.compiler.compileTimeoutMs
+		outputPath: compileOutputPath
 	};
 	const linkInvocation =
 		packageKind === 'main'
@@ -231,8 +253,7 @@ export function createBrowserGoBuildPlan(
 						path: file.path,
 						contents: file.contents
 					})),
-					outputPath: targetConfig.planner.linkOutputPath,
-					timeoutMs: manifest.compiler.linkTimeoutMs
+					outputPath: targetConfig.planner.linkOutputPath
 				} satisfies BrowserGoToolInvocation)
 			: undefined;
 	const compileKeyInput = stableStringify({
@@ -245,7 +266,7 @@ export function createBrowserGoBuildPlan(
 		trimpath,
 		sourceFiles,
 		dependencies,
-		embeds: normalizedRequest.embeds || []
+		embeds: normalizedEmbeds
 	});
 	const compileCacheKey = `wasm-go:compile:${fnv1a(compileKeyInput)}`;
 	const linkCacheKey = linkInvocation

@@ -139,7 +139,6 @@ export interface BrowserGoToolInvocation {
 	env: Record<string, string>;
 	inputFiles: BrowserGoWorkspaceFile[];
 	outputPath: string;
-	timeoutMs: number;
 }
 
 export interface BrowserGoBuildPlan {

@@ -35,6 +35,7 @@ describe('build planner', () => {
 		expect(plan.importcfg).toContain('packagefile runtime=/sysroot/runtime.a');
 		expect(plan.cacheKeys.compile).toMatch(/^wasm-go:compile:/);
 		expect(plan.cacheKeys.link).toMatch(/^wasm-go:link:/);
+		expect(plan.compile).not.toHaveProperty('timeoutMs');
 	});
 
 	it('plans transitional wasip2 and wasip3 requests through the wasip1 toolchain env', () => {
@@ -107,5 +108,62 @@ describe('build planner', () => {
 				createRuntimeManifest()
 			)
 		).toThrow(/does not allow workspace traversal paths/);
+	});
+
+	it('normalizes dependency and embed ordering before hashing compile cache keys', () => {
+		const left = createBrowserGoBuildPlan(
+			createCompileRequest({
+				dependencies: [
+					{
+						importPath: 'runtime',
+						archivePath: '/sysroot/runtime.a'
+					},
+					{
+						importPath: 'fmt',
+						archivePath: '/sysroot/fmt.a'
+					}
+				],
+				embeds: [
+					{
+						pattern: 'assets/*.txt',
+						files: [{ path: 'assets/b.txt' }, { path: 'assets/a.txt' }]
+					},
+					{
+						pattern: 'templates/*.tmpl',
+						files: [{ path: 'templates/main.tmpl' }]
+					}
+				]
+			}),
+			createRuntimeManifest()
+		);
+		const right = createBrowserGoBuildPlan(
+			createCompileRequest({
+				dependencies: [
+					{
+						importPath: 'fmt',
+						archivePath: '/sysroot/fmt.a'
+					},
+					{
+						importPath: 'runtime',
+						archivePath: '/sysroot/runtime.a'
+					}
+				],
+				embeds: [
+					{
+						pattern: 'templates/*.tmpl',
+						files: [{ path: 'templates/main.tmpl' }]
+					},
+					{
+						pattern: 'assets/*.txt',
+						files: [{ path: 'assets/a.txt' }, { path: 'assets/b.txt' }]
+					}
+				]
+			}),
+			createRuntimeManifest()
+		);
+
+		expect(left.cacheKeys.compile).toBe(right.cacheKeys.compile);
+		expect(left.importcfg).toBe(right.importcfg);
+		expect(left.embedcfg).toBe(right.embedcfg);
 	});
 });

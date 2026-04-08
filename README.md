@@ -1,11 +1,13 @@
 # wasm-go
 
-`wasm-go` is a browser-oriented Go compiler runtime scaffold that follows the staged plan in
-`WORK.md`.
+`wasm-go` is a browser-oriented Go compiler runtime prototype for upstream-style `cmd/compile` and
+`cmd/link` execution in WebAssembly. The repository is currently `private: true`, and the checked-in
+API should be treated as repo-scoped scaffolding rather than a published npm contract.
 
 Current checked-in scope:
 
-- runtime manifest and asset model for `wasip1/wasm`
+- runtime manifest and asset model for `wasip1/wasm`, plus preview1-compatible alias targets for
+  `wasip2/wasm` and `wasip3/wasm`
 - browser/Node WASI execution path
 - build planner that emits `compile`/`link` invocations plus `importcfg` and `embedcfg`
 - reproducible runtime packaging from the official Go `1.26.1` toolchain
@@ -21,8 +23,9 @@ cd /path/to/wasm-go
 npm run build
 ```
 
-Download the pinned official Go `1.26.1` host archive for the current machine, verify its SHA-256,
-then generate runtime assets:
+Download the pinned official Go `1.26.1` host archive for one of the currently supported
+`prepare:runtime` hosts (`linux-x64`, `linux-arm64`, `darwin-x64`, `darwin-arm64`), verify its
+SHA-256, then generate runtime assets:
 
 ```bash
 cd /path/to/wasm-go
@@ -55,13 +58,22 @@ That sequence:
 1. builds `dist/`
 2. prepares the pinned `go1.26.1` runtime assets
 3. calls `compileGo()` against the generated bundled runtime
-4. links a `wasip1/wasm` hello program
+4. links a preview1-compatible hello program
 5. executes the linked artifact and checks for `probe-ok\n`
+
+## Target Support
+
+| Target | Planner | In-process execution | Notes |
+| --- | --- | --- | --- |
+| `wasip1/wasm` | yes | yes | primary packaged/runtime target |
+| `wasip2/wasm` | yes | yes | preview1-compatible alias that still compiles with `GOOS=wasip1` |
+| `wasip3/wasm` | yes | yes | preview1-compatible alias that still compiles with `GOOS=wasip1` |
+| `js/wasm` | partial | no | planner/runtime metadata exists, but the in-process executor still rejects `js/wasm` artifacts |
 
 ## Library Contract
 
-The public package now supports the consumer-facing path that is closest to `wasm-rust`, without
-yet wiring `wasm-idle` itself.
+The current scaffold supports the consumer-facing path that is closest to `wasm-rust`, without yet
+wiring `wasm-idle` itself.
 
 ```ts
 import createGoCompiler from './dist/index.js';
@@ -87,9 +99,15 @@ For simple single-file programs, the compiler now:
 - auto-populates stdlib archive mappings from the bundled sysroot
 - returns the linked executable under both `artifact.bytes` and `artifact.wasm`
 
+If you pass a custom `manifest`, planning still works, but execution currently requires an injected
+`dependencies.runTool`. The bundled executor path is only wired for the default bundled runtime
+assets.
+
 ## Current Limits
 
-- default runtime generation is only wired for `wasip1/wasm`
+- default runtime generation packages `wasip1/wasm`; `wasip2/wasm` and `wasip3/wasm` currently
+  reuse the same preview1-compatible toolchain/sysroot as aliases
 - module resolution and dependency graphing are still manual; the caller currently supplies the
   `dependencies` list used to build `importcfg`
-- `js/wasm` output mode is still planned but not packaged yet
+- `js/wasm` is not executable through the in-process runtime yet, even when `wasm_exec.js` is
+  present in the runtime bundle

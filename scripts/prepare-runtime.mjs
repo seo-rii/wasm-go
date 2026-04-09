@@ -99,18 +99,25 @@ async function ensureDownloadedArchive(cacheDir) {
 
 function runCommand(command, args, options = {}) {
 	return new Promise((resolve, reject) => {
+		let settled = false;
 		const child = spawn(command, args, {
 			stdio: 'inherit',
 			...options
 		});
-		child.on('exit', (code) => {
+		child.on('close', (code) => {
+			if (settled) return;
+			settled = true;
 			if (code === 0) {
 				resolve();
 				return;
 			}
 			reject(new Error(`command failed (${code}): ${command} ${args.join(' ')}`));
 		});
-		child.on('error', reject);
+		child.on('error', (error) => {
+			if (settled) return;
+			settled = true;
+			reject(error);
+		});
 	});
 }
 

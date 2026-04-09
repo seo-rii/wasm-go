@@ -8,6 +8,7 @@ const scriptsDir = path.dirname(scriptPath);
 const projectRoot = path.resolve(scriptsDir, '..');
 const distRoot = path.join(projectRoot, 'dist');
 const runtimeDir = path.join(distRoot, 'runtime');
+const packEntriesCache = new Map();
 
 async function loadRuntimeManifest() {
 	return JSON.parse(
@@ -16,14 +17,23 @@ async function loadRuntimeManifest() {
 }
 
 async function loadPackEntries(packAsset, indexAsset) {
-	const packBytes = gunzipSync(await readFile(path.join(runtimeDir, packAsset)));
-	const index = JSON.parse(
-		gunzipSync(await readFile(path.join(runtimeDir, indexAsset))).toString('utf8')
-	);
-	return index.entries.map((entry) => ({
-		runtimePath: entry.runtimePath,
-		bytes: packBytes.subarray(entry.offset, entry.offset + entry.length)
-	}));
+	const cacheKey = `${packAsset}:${indexAsset}`;
+	const cached = packEntriesCache.get(cacheKey);
+	if (cached) {
+		return cached;
+	}
+	const loaded = (async () => {
+		const packBytes = gunzipSync(await readFile(path.join(runtimeDir, packAsset)));
+		const index = JSON.parse(
+			gunzipSync(await readFile(path.join(runtimeDir, indexAsset))).toString('utf8')
+		);
+		return index.entries.map((entry) => ({
+			runtimePath: entry.runtimePath,
+			bytes: packBytes.subarray(entry.offset, entry.offset + entry.length)
+		}));
+	})();
+	packEntriesCache.set(cacheKey, loaded);
+	return await loaded;
 }
 
 async function main() {

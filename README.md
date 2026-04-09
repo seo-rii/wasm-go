@@ -6,13 +6,15 @@ API should be treated as repo-scoped scaffolding rather than a published npm con
 
 Current checked-in scope:
 
-- runtime manifest and asset model for `wasip1/wasm`, plus preview1-compatible alias targets for
-  `wasip2/wasm` and `wasip3/wasm`
+- runtime manifest and asset model for `wasip1/wasm` and `js/wasm`, plus preview1-compatible alias
+  targets for `wasip2/wasm` and `wasip3/wasm` unless a custom toolchain exposes them directly
 - browser/Node WASI execution path
+- browser/Node `wasm_exec.js` execution path for `js/wasm`
 - build planner that emits `compile`/`link` invocations plus `importcfg` and `embedcfg`
 - reproducible runtime packaging from the official Go `1.26.1` toolchain
 - runtime probe that compiles and runs `fmt.Println("probe-ok")`
-- code-only compile requests that auto-populate stdlib `importcfg` entries from the bundled sysroot
+- code-only compile requests that auto-populate the reachable stdlib `importcfg` closure from the
+  bundled sysroot
 
 ## Reproducible Runtime Build
 
@@ -38,11 +40,17 @@ That writes:
 - `dist/runtime/tools/link.wasm.gz`
 - `dist/runtime/sysroot/wasip1.pack.gz`
 - `dist/runtime/sysroot/wasip1.index.json.gz`
+- `dist/runtime/sysroot/wasip1.stdlib-index.json.gz`
+- `dist/runtime/sysroot/js.pack.gz`
+- `dist/runtime/sysroot/js.index.json.gz`
+- `dist/runtime/sysroot/js.stdlib-index.json.gz`
+- `dist/runtime/runtime/wasm_exec.js`
 - `dist/runtime/runtime-manifest.v1.json`
 - `dist/runtime/runtime-build.json`
 
 `runtime-build.json` records the exact upstream archive URL and checksum so the same runtime can be
-rebuilt later.
+rebuilt later, and records whether `wasip2/wasm` / `wasip3/wasm` were packaged as real targets or
+as `wasip1/wasm` aliases.
 
 ## Validation
 
@@ -58,17 +66,17 @@ That sequence:
 1. builds `dist/`
 2. prepares the pinned `go1.26.1` runtime assets
 3. calls `compileGo()` against the generated bundled runtime
-4. links a preview1-compatible hello program
-5. executes the linked artifact and checks for `probe-ok\n`
+4. links preview1-compatible `wasip1/wasm`, `wasip2/wasm`, `wasip3/wasm`, and `js/wasm` hello programs
+5. executes each linked artifact and checks for `probe-ok\n`
 
 ## Target Support
 
 | Target | Planner | In-process execution | Notes |
 | --- | --- | --- | --- |
 | `wasip1/wasm` | yes | yes | primary packaged/runtime target |
-| `wasip2/wasm` | yes | yes | preview1-compatible alias that still compiles with `GOOS=wasip1` |
-| `wasip3/wasm` | yes | yes | preview1-compatible alias that still compiles with `GOOS=wasip1` |
-| `js/wasm` | partial | no | planner/runtime metadata exists, but the in-process executor still rejects `js/wasm` artifacts |
+| `wasip2/wasm` | yes | yes | uses native `GOOS=wasip2` when the toolchain supports it, otherwise aliases to `wasip1` |
+| `wasip3/wasm` | yes | yes | uses native `GOOS=wasip3` when the toolchain supports it, otherwise aliases to `wasip1` |
+| `js/wasm` | yes | yes | packaged with `wasm_exec.js` and a dedicated `js` stdlib sysroot |
 
 ## Library Contract
 
@@ -96,18 +104,21 @@ For simple single-file programs, the compiler now:
 
 - defaults the source file to `main.go`
 - defaults the package import path for planning/cache purposes
-- auto-populates stdlib archive mappings from the bundled sysroot
+- auto-populates the reachable stdlib archive mappings from the bundled sysroot
 - returns the linked executable under both `artifact.bytes` and `artifact.wasm`
 
-If you pass a custom `manifest`, planning still works, but execution currently requires an injected
-`dependencies.runTool`. The bundled executor path is only wired for the default bundled runtime
-assets.
+If you pass a custom `manifest`, the bundled executor path now still works as long as the referenced
+runtime assets are reachable under `runtimeBaseUrl` (or under paths relative to the default bundled
+runtime root). Injecting `dependencies.runTool` is only necessary when you want to override the
+default in-process executor.
 
 ## Current Limits
 
-- default runtime generation packages `wasip1/wasm`; `wasip2/wasm` and `wasip3/wasm` currently
-  reuse the same preview1-compatible toolchain/sysroot as aliases
-- module resolution and dependency graphing are still manual; the caller currently supplies the
-  `dependencies` list used to build `importcfg`
-- `js/wasm` is not executable through the in-process runtime yet, even when `wasm_exec.js` is
-  present in the runtime bundle
+- the pinned official `go1.26.1` toolchain currently reports `wasip1/wasm` and `js/wasm` from
+  `go tool dist list`; unless you provide a custom toolchain that adds `wasip2/wasm` or
+  `wasip3/wasm`, those targets still package and execute through the `wasip1` alias path
+- module resolution outside the bundled stdlib is still manual; third-party/user package archives
+  still need to be supplied through `dependencies`
+- `js/wasm` execution currently covers the bundled `wasm_exec.js` runtime path, argv/env, and
+  stdout/stderr capture; it does not yet emulate a full Node-style filesystem for `os`/`syscall`
+  heavy programs

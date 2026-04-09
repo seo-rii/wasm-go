@@ -72,6 +72,26 @@ describe('runtime manifest', () => {
 		).toThrow(/unsupported wasm-go target js\/wasm/);
 	});
 
+	it('accepts real wasip2/wasip3 goos values alongside alias manifests', () => {
+		const manifest = normalizeRuntimeManifest({
+			...createRuntimeManifest(),
+			targets: {
+				...createRuntimeManifest().targets,
+				'wasip2/wasm': {
+					...createRuntimeManifest().targets['wasip2/wasm'],
+					goos: 'wasip2'
+				},
+				'wasip3/wasm': {
+					...createRuntimeManifest().targets['wasip3/wasm'],
+					goos: 'wasip3'
+				}
+			}
+		});
+
+		expect(resolveTargetManifest(manifest, 'wasip2/wasm').goos).toBe('wasip2');
+		expect(resolveTargetManifest(manifest, 'wasip3/wasm').goos).toBe('wasip3');
+	});
+
 	it('loads the manifest through fetch', async () => {
 		const loaded = await loadRuntimeManifest('https://example.invalid/runtime-manifest.v1.json', async () =>
 			new Response(JSON.stringify(createRuntimeManifest()))

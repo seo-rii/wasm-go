@@ -192,18 +192,26 @@ function parseExecutionConfig(
 }
 
 function expectedTargetShape(target: SupportedGoTarget) {
-	if (
-		target === 'wasip1/wasm' ||
-		target === 'wasip2/wasm' ||
-		target === 'wasip3/wasm'
-	) {
+	if (target === 'wasip1/wasm') {
 		return {
-			goos: 'wasip1',
+			goos: ['wasip1'],
+			goarch: 'wasm'
+		} as const;
+	}
+	if (target === 'wasip2/wasm') {
+		return {
+			goos: ['wasip1', 'wasip2'],
+			goarch: 'wasm'
+		} as const;
+	}
+	if (target === 'wasip3/wasm') {
+		return {
+			goos: ['wasip1', 'wasip3'],
 			goarch: 'wasm'
 		} as const;
 	}
 	return {
-		goos: 'js',
+		goos: ['js'],
 		goarch: 'wasm'
 	} as const;
 }
@@ -215,9 +223,9 @@ function parseTargetConfig(
 ): RuntimeTargetConfig {
 	const object = expectObject(value, label);
 	const expected = expectedTargetShape(target);
-	const goos = expectString(object.goos, `${label}.goos`);
+	const goos = expectString(object.goos, `${label}.goos`) as RuntimeTargetConfig['goos'];
 	const goarch = expectString(object.goarch, `${label}.goarch`);
-	if (goos !== expected.goos || goarch !== expected.goarch) {
+	if (!(expected.goos as readonly string[]).includes(goos) || goarch !== expected.goarch) {
 		throw new Error(`invalid ${label}.goos/goarch in wasm-go runtime manifest`);
 	}
 	return {

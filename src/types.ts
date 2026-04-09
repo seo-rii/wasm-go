@@ -1,5 +1,6 @@
 export type SupportedGoWasiTarget = 'wasip1/wasm' | 'wasip2/wasm' | 'wasip3/wasm';
 export type SupportedGoTarget = SupportedGoWasiTarget | 'js/wasm';
+export type SupportedGoOs = 'wasip1' | 'wasip2' | 'wasip3' | 'js';
 export type BrowserGoArtifactFormat = 'go-archive' | 'wasi-core-wasm' | 'js-wasm';
 export type BrowserGoCompileStage = 'manifest' | 'plan' | 'compile' | 'link' | 'done';
 export type CompilerLogLevel = 'log' | 'warn' | 'error' | 'debug';
@@ -90,7 +91,7 @@ export interface RuntimeTargetExecutionConfig {
 
 export interface RuntimeTargetConfig {
 	target: SupportedGoTarget;
-	goos: 'wasip1' | 'js';
+	goos: SupportedGoOs;
 	goarch: 'wasm';
 	artifactFormat: Exclude<BrowserGoArtifactFormat, 'go-archive'>;
 	sysrootFiles?: RuntimeAssetFile[];

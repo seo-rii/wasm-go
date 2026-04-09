@@ -60,6 +60,51 @@ describe('build planner', () => {
 		expect(wasip3Plan.artifactFormat).toBe('wasi-core-wasm');
 	});
 
+	it('uses target-specific GOOS values when the runtime manifest carries real wasip2/wasip3 targets', () => {
+		const manifest = createRuntimeManifest();
+		const planWasip2 = createBrowserGoBuildPlan(
+			createCompileRequest({
+				target: 'wasip2/wasm'
+			}),
+			{
+				...manifest,
+				targets: {
+					...manifest.targets,
+					'wasip2/wasm': {
+						...manifest.targets['wasip2/wasm'],
+						goos: 'wasip2'
+					},
+					'wasip3/wasm': {
+						...manifest.targets['wasip3/wasm'],
+						goos: 'wasip3'
+					}
+				}
+			}
+		);
+		const planWasip3 = createBrowserGoBuildPlan(
+			createCompileRequest({
+				target: 'wasip3/wasm'
+			}),
+			{
+				...manifest,
+				targets: {
+					...manifest.targets,
+					'wasip2/wasm': {
+						...manifest.targets['wasip2/wasm'],
+						goos: 'wasip2'
+					},
+					'wasip3/wasm': {
+						...manifest.targets['wasip3/wasm'],
+						goos: 'wasip3'
+					}
+				}
+			}
+		);
+
+		expect(planWasip2.compile.env.GOOS).toBe('wasip2');
+		expect(planWasip3.compile.env.GOOS).toBe('wasip3');
+	});
+
 	it('emits embedcfg for embed-enabled packages', () => {
 		const plan = createBrowserGoBuildPlan(
 			createCompileRequest({

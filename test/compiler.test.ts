@@ -8,15 +8,19 @@ import {
 import { createCompileRequest, createRuntimeManifest } from './helpers.js';
 
 describe('compiler facade', () => {
-	it('returns a clear failure when tool execution is not wired yet', async () => {
+	it('returns a clear failure when bundled runtime assets are missing', async () => {
 		const result = await compileGo(createCompileRequest(), {
-			manifest: createRuntimeManifest()
+			manifest: createRuntimeManifest(),
+			runtimeBaseUrl: 'https://example.invalid/runtime/',
+			dependencies: {
+				fetchImpl: async () => new Response(null, { status: 404 })
+			}
 		});
 
 		expect(result.success).toBe(false);
 		expect(result.plan?.compile.tool).toBe('compile');
-		expect(result.stderr).toMatch(/custom manifest/);
-		expect(result.stderr).toMatch(/dependencies.runTool/);
+		expect(result.stderr).toMatch(/failed to fetch/);
+		expect(result.stderr).toMatch(/wasip1\.(pack|index\.json)\.gz/);
 	});
 
 	it('runs compile and link invocations through an injected runner', async () => {

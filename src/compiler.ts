@@ -484,36 +484,34 @@ export async function compileGo(
 	};
 	const runTool =
 		dependencies.runTool ||
-		(!options.manifest
-			? ((invocation: BrowserGoToolInvocation, context?: {
-					reportAssetProgress?: (asset: string, loaded: number, total?: number) => void;
-				}) =>
-					executeGoToolInvocation(
-						invocation,
-						plan,
-						runtimeBaseUrl,
-						fetchImpl,
-						context?.reportAssetProgress
-					))
-			: undefined);
-	if (!runTool) {
-		return failure(
-			options.manifest
-				? 'wasm-go can plan against a custom manifest, but custom manifests are not executed by the bundled runtime path yet. Provide dependencies.runTool to execute the generated build plan.'
-				: 'wasm-go phase 0-1 scaffolding is ready, but compile.wasm/link.wasm execution is not wired yet. Provide dependencies.runTool to execute the generated build plan.',
-			logs.records,
-			plan
-		);
-	}
+		((invocation: BrowserGoToolInvocation, context?: {
+			reportAssetProgress?: (asset: string, loaded: number, total?: number) => void;
+		}) =>
+			executeGoToolInvocation(
+				invocation,
+				plan,
+				runtimeBaseUrl,
+				fetchImpl,
+				context?.reportAssetProgress
+			));
 	if (useDetailedRuntimeProgress) {
 		emitCompileStage('preparing compile runtime');
 	} else {
 		progress('compile', 0, 1, 'running compile');
 	}
 	logs.push(`[wasm-go] compile ${plan.compile.args.join(' ')}`);
-	const compileResult = await runTool(plan.compile, {
-		reportAssetProgress: updateCompileAssetProgress
-	});
+	let compileResult: BrowserGoToolResult;
+	try {
+		compileResult = await runTool(plan.compile, {
+			reportAssetProgress: updateCompileAssetProgress
+		});
+	} catch (error) {
+		return failure(
+			error instanceof Error ? error.message : String(error),
+			logs.records,
+			plan
+		);
+	}
 	const compileOutputs = normalizeToolOutputs(compileResult.outputs);
 	if (useDetailedRuntimeProgress) {
 		compileStageExecutionFraction = 1;
@@ -583,9 +581,20 @@ export async function compileGo(
 			}
 		]
 	};
-	const linkResult = await runTool(linkInputs, {
-		reportAssetProgress: updateLinkAssetProgress
-	});
+	let linkResult: BrowserGoToolResult;
+	try {
+		linkResult = await runTool(linkInputs, {
+			reportAssetProgress: updateLinkAssetProgress
+		});
+	} catch (error) {
+		return failure(
+			error instanceof Error ? error.message : String(error),
+			logs.records,
+			plan,
+			stdout,
+			parseCompilerDiagnostics(collectCompilerDiagnosticText(stderr, stdout))
+		);
+	}
 	const linkOutputs = normalizeToolOutputs(linkResult.outputs);
 	if (useDetailedRuntimeProgress) {
 		linkStageExecutionFraction = 1;

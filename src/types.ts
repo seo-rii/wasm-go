@@ -17,6 +17,11 @@ export interface RuntimeAssetPackReference {
 	totalBytes: number;
 }
 
+export interface RuntimeStdlibIndexAsset {
+	asset: string;
+	packageCount: number;
+}
+
 export interface RuntimePackIndexEntry {
 	runtimePath: string;
 	offset: number;
@@ -28,6 +33,18 @@ export interface RuntimePackIndex {
 	fileCount: number;
 	totalBytes: number;
 	entries: RuntimePackIndexEntry[];
+}
+
+export interface RuntimeStdlibPackageEntry {
+	importPath: string;
+	runtimePath: string;
+	imports: string[];
+}
+
+export interface RuntimeStdlibIndex {
+	format: 'wasm-go-stdlib-index-v1';
+	packageCount: number;
+	packages: RuntimeStdlibPackageEntry[];
 }
 
 export interface RuntimeToolMemoryConfig {
@@ -78,6 +95,7 @@ export interface RuntimeTargetConfig {
 	artifactFormat: Exclude<BrowserGoArtifactFormat, 'go-archive'>;
 	sysrootFiles?: RuntimeAssetFile[];
 	sysrootPack?: RuntimeAssetPackReference;
+	stdlibIndex?: RuntimeStdlibIndexAsset;
 	execution: RuntimeTargetExecutionConfig;
 	planner: RuntimePlannerConfig;
 }

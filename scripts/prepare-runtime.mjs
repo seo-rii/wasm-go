@@ -121,6 +121,90 @@ function runCommand(command, args, options = {}) {
 	});
 }
 
+function runCommandCapture(command, args, options = {}) {
+	return new Promise((resolve, reject) => {
+		let settled = false;
+		const stdout = [];
+		const stderr = [];
+		const child = spawn(command, args, {
+			stdio: ['ignore', 'pipe', 'pipe'],
+			...options
+		});
+		child.stdout?.on('data', (chunk) => {
+			stdout.push(Buffer.from(chunk));
+		});
+		child.stderr?.on('data', (chunk) => {
+			stderr.push(Buffer.from(chunk));
+		});
+		child.on('close', (code) => {
+			if (settled) return;
+			settled = true;
+			if (code === 0) {
+				resolve(Buffer.concat(stdout).toString('utf8'));
+				return;
+			}
+			reject(
+				new Error(
+					`command failed (${code}): ${command} ${args.join(' ')}\n${Buffer.concat(stderr).toString('utf8')}`
+				)
+			);
+		});
+		child.on('error', (error) => {
+			if (settled) return;
+			settled = true;
+			reject(error);
+		});
+	});
+}
+
+function parseJsonObjectStream(text) {
+	const objects = [];
+	let start = -1;
+	let depth = 0;
+	let inString = false;
+	let escaped = false;
+	for (let index = 0; index < text.length; index += 1) {
+		const character = text[index];
+		if (start === -1) {
+			if (character === '{') {
+				start = index;
+				depth = 1;
+			}
+			continue;
+		}
+		if (inString) {
+			if (escaped) {
+				escaped = false;
+				continue;
+			}
+			if (character === '\\') {
+				escaped = true;
+				continue;
+			}
+			if (character === '"') {
+				inString = false;
+			}
+			continue;
+		}
+		if (character === '"') {
+			inString = true;
+			continue;
+		}
+		if (character === '{') {
+			depth += 1;
+			continue;
+		}
+		if (character === '}') {
+			depth -= 1;
+			if (depth === 0) {
+				objects.push(JSON.parse(text.slice(start, index + 1)));
+				start = -1;
+			}
+		}
+	}
+	return objects;
+}
+
 async function ensureExtractedToolchain(cacheDir, archiveInfo) {
 	const extractionRoot = path.join(cacheDir, 'toolchains', goVersion, hostKey());
 	const goroot = path.join(extractionRoot, 'go');
@@ -188,6 +272,40 @@ async function packRuntimeDirectory(sourceDir, runtimePrefix) {
 	};
 }
 
+async function buildStdlibIndex(goBinary, pkgDir, env) {
+	const archiveFiles = await listFilesRecursive(pkgDir);
+	const archiveImportPaths = new Set(
+		archiveFiles
+			.filter((absolutePath) => absolutePath.endsWith('.a'))
+			.map((absolutePath) =>
+				path
+					.relative(pkgDir, absolutePath)
+					.replace(/\\/g, '/')
+					.slice(0, -'.a'.length)
+			)
+	);
+	const stdout = await runCommandCapture(
+		goBinary,
+		['list', '-deps', '-json', 'std'],
+		{ env }
+	);
+	const packages = parseJsonObjectStream(stdout)
+		.filter((entry) => archiveImportPaths.has(entry.ImportPath))
+		.map((entry) => ({
+			importPath: entry.ImportPath,
+			runtimePath: `/sysroot/${entry.ImportPath}.a`,
+			imports: (entry.Imports || [])
+				.filter((importPath) => archiveImportPaths.has(importPath))
+				.sort((left, right) => left.localeCompare(right))
+		}))
+		.sort((left, right) => left.importPath.localeCompare(right.importPath));
+	return {
+		format: 'wasm-go-stdlib-index-v1',
+		packageCount: packages.length,
+		packages
+	};
+}
+
 async function copyMaybeWasmExec(goroot, runtimeDir) {
 	const candidates = [
 		path.join(goroot, 'lib', 'wasm', 'wasm_exec.js'),
@@ -251,6 +369,7 @@ async function main() {
 		}
 	);
 	const packedSysroot = await packRuntimeDirectory(pkgDir, '/sysroot');
+	const stdlibIndex = await buildStdlibIndex(toolchain.goBinary, pkgDir, env);
 	await rm(distRuntimeDir, { recursive: true, force: true });
 	await mkdir(path.join(distRuntimeDir, 'tools'), { recursive: true });
 	await mkdir(path.join(distRuntimeDir, 'sysroot'), { recursive: true });
@@ -269,6 +388,10 @@ async function main() {
 	await writeFile(
 		path.join(distRuntimeDir, 'sysroot', 'wasip1.index.json.gz'),
 		gzipSync(Buffer.from(JSON.stringify(packedSysroot.index, null, 2)))
+	);
+	await writeFile(
+		path.join(distRuntimeDir, 'sysroot', 'wasip1.stdlib-index.json.gz'),
+		gzipSync(Buffer.from(JSON.stringify(stdlibIndex, null, 2)))
 	);
 	const wasmExecRelativePath = await copyMaybeWasmExec(toolchain.goroot, distRuntimeDir);
 	const runtimeManifest = {
@@ -313,6 +436,10 @@ async function main() {
 					fileCount: packedSysroot.index.fileCount,
 					totalBytes: packedSysroot.index.totalBytes
 				},
+				stdlibIndex: {
+					asset: 'sysroot/wasip1.stdlib-index.json.gz',
+					packageCount: stdlibIndex.packageCount
+				},
 				execution: {
 					kind: 'wasi-preview1'
 				},
@@ -336,6 +463,10 @@ async function main() {
 					fileCount: packedSysroot.index.fileCount,
 					totalBytes: packedSysroot.index.totalBytes
 				},
+				stdlibIndex: {
+					asset: 'sysroot/wasip1.stdlib-index.json.gz',
+					packageCount: stdlibIndex.packageCount
+				},
 				execution: {
 					kind: 'wasi-preview1'
 				},
@@ -358,6 +489,10 @@ async function main() {
 					index: 'sysroot/wasip1.index.json.gz',
 					fileCount: packedSysroot.index.fileCount,
 					totalBytes: packedSysroot.index.totalBytes
+				},
+				stdlibIndex: {
+					asset: 'sysroot/wasip1.stdlib-index.json.gz',
+					packageCount: stdlibIndex.packageCount
 				},
 				execution: {
 					kind: 'wasi-preview1'
@@ -390,11 +525,15 @@ async function main() {
 			linkWasmGzip: 'tools/link.wasm.gz',
 			sysrootPackGzip: 'sysroot/wasip1.pack.gz',
 			sysrootIndexGzip: 'sysroot/wasip1.index.json.gz',
+			stdlibIndexGzip: 'sysroot/wasip1.stdlib-index.json.gz',
 			...(wasmExecRelativePath ? { wasmExecJs: wasmExecRelativePath } : {})
 		},
 		sysroot: {
 			fileCount: packedSysroot.index.fileCount,
 			totalBytes: packedSysroot.index.totalBytes
+		},
+		stdlibIndex: {
+			packageCount: stdlibIndex.packageCount
 		},
 		supportedTargets: packagedWasiTargets
 	};

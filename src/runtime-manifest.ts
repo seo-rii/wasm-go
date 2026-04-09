@@ -8,6 +8,7 @@ import type {
 	RuntimeHostConfig,
 	RuntimeManifestV1,
 	RuntimePlannerConfig,
+	RuntimeStdlibIndexAsset,
 	RuntimeTargetConfig,
 	RuntimeTargetExecutionConfig,
 	RuntimeToolConfig,
@@ -116,6 +117,14 @@ function parseRuntimePackReference(value: unknown, label: string): RuntimeAssetP
 	};
 }
 
+function parseRuntimeStdlibIndexAsset(value: unknown, label: string): RuntimeStdlibIndexAsset {
+	const object = expectObject(value, label);
+	return {
+		asset: expectString(object.asset, `${label}.asset`),
+		packageCount: expectNonNegativeInteger(object.packageCount, `${label}.packageCount`)
+	};
+}
+
 function parseRuntimeToolConfig(value: unknown, label: string): RuntimeToolConfig {
 	const object = expectObject(value, label);
 	const memory = expectObject(object.memory, `${label}.memory`);
@@ -221,6 +230,9 @@ function parseTargetConfig(
 			: {}),
 		...(object.sysrootPack !== undefined
 			? { sysrootPack: parseRuntimePackReference(object.sysrootPack, `${label}.sysrootPack`) }
+			: {}),
+		...(object.stdlibIndex !== undefined
+			? { stdlibIndex: parseRuntimeStdlibIndexAsset(object.stdlibIndex, `${label}.stdlibIndex`) }
 			: {}),
 		execution: parseExecutionConfig(object.execution, `${label}.execution`),
 		planner: parseRuntimePlannerConfig(object.planner, `${label}.planner`)

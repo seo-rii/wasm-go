@@ -284,6 +284,92 @@ func main() {
 		expect(result.plan?.importcfg).toContain('packagefile runtime=/sysroot/runtime.a');
 	});
 
+	it('closes only the requested stdlib dependency graph when a stdlib index is present', async () => {
+		const manifest = createRuntimeManifest();
+		const wasip1Target = manifest.targets['wasip1/wasm'];
+		if (!wasip1Target) {
+			throw new Error('missing wasip1 target in test manifest');
+		}
+		const result = await compileGo(
+			{
+				code: `package main
+
+import "fmt"
+
+func main() {
+	fmt.Println("hello")
+}
+`,
+				target: 'wasip1/wasm'
+			},
+			{
+				manifest: {
+					...manifest,
+					targets: {
+						...manifest.targets,
+						'wasip1/wasm': {
+							...wasip1Target,
+							stdlibIndex: {
+								asset: 'sysroot/wasip1.stdlib-index.json.gz',
+								packageCount: 4
+							}
+						}
+					}
+				},
+				dependencies: {
+					fetchImpl: async (url) => {
+						if (String(url).endsWith('/sysroot/wasip1.stdlib-index.json.gz')) {
+							return new Response(
+								JSON.stringify({
+									format: 'wasm-go-stdlib-index-v1',
+									packageCount: 4,
+									packages: [
+										{
+											importPath: 'bytes',
+											runtimePath: '/sysroot/bytes.a',
+											imports: []
+										},
+										{
+											importPath: 'errors',
+											runtimePath: '/sysroot/errors.a',
+											imports: []
+										},
+										{
+											importPath: 'fmt',
+											runtimePath: '/sysroot/fmt.a',
+											imports: ['errors', 'runtime']
+										},
+										{
+											importPath: 'runtime',
+											runtimePath: '/sysroot/runtime.a',
+											imports: []
+										}
+									]
+								})
+							);
+						}
+						return new Response(new Uint8Array([1, 2, 3]));
+					},
+					runTool: async (invocation) => ({
+						exitCode: 0,
+						outputs: {
+							[invocation.outputPath]:
+								invocation.tool === 'compile'
+									? new Uint8Array([1, 2, 3])
+									: new Uint8Array([0, 97, 115, 109, 1])
+						}
+					})
+				}
+			}
+		);
+
+		expect(result.success).toBe(true);
+		expect(result.plan?.importcfg).toContain('packagefile fmt=/sysroot/fmt.a');
+		expect(result.plan?.importcfg).toContain('packagefile errors=/sysroot/errors.a');
+		expect(result.plan?.importcfg).toContain('packagefile runtime=/sysroot/runtime.a');
+		expect(result.plan?.importcfg).not.toContain('packagefile bytes=/sysroot/bytes.a');
+	});
+
 	it('rejects empty requests early', async () => {
 		const result = await compileGo(
 			{},

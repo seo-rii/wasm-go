@@ -1,18 +1,21 @@
 import { createBrowserGoBuildPlan } from './build-planner.js';
 import { resolveVersionedAssetUrl } from './asset-url.js';
 import {
+	fetchRuntimeAssetJson,
 	fetchRuntimeAssetBytes,
 	loadRuntimePackEntries,
 	loadRuntimePackIndex
 } from './runtime-asset.js';
 import { executeGoToolInvocation } from './tool-runtime.js';
 import {
+	collectGoFileImports,
 	collectCompilerDiagnosticText,
 	createSysrootDependency,
 	normalizeCompileRequestSource,
 	normalizePackageImportPath,
 	normalizeRequestedTarget,
 	parseCompilerDiagnostics,
+	resolveStdlibDependencies,
 	validateCompileRequest
 } from './compiler-support.js';
 import {
@@ -27,12 +30,14 @@ import type {
 	BrowserGoCompileRequest,
 	BrowserGoCompiler,
 	BrowserGoCompilerResult,
+	BrowserGoSourceFile,
 	BrowserGoToolInvocation,
 	BrowserGoToolResult,
 	CompilerLogLevel,
 	CompilerLogRecord,
 	NormalizedRuntimeManifest,
 	RuntimeManifestV1,
+	RuntimeStdlibIndex,
 	SupportedGoTarget
 } from './types.js';
 
@@ -309,6 +314,29 @@ async function resolveAutoDependencies(
 		return [];
 	}
 	const target = resolveTargetManifest(manifest, normalizeRequestedTarget(request));
+	const sourceFiles = (
+		Array.isArray(request.files)
+			? request.files
+			: Object.entries(request.files || {}).map(([path, contents]) => ({ path, contents }))
+	) as BrowserGoSourceFile[];
+	if (target.stdlibIndex) {
+		const stdlibIndex = (await fetchRuntimeAssetJson(
+			resolveVersionedAssetUrl(runtimeBaseUrl, target.stdlibIndex.asset),
+			'wasm-go stdlib index',
+			fetchImpl,
+			(loaded, total) => reportAssetProgress?.(target.stdlibIndex!.asset, loaded, total)
+		)) as RuntimeStdlibIndex;
+		if (
+			stdlibIndex.format === 'wasm-go-stdlib-index-v1' &&
+			Array.isArray(stdlibIndex.packages)
+		) {
+			return resolveStdlibDependencies(
+				stdlibIndex,
+				collectGoFileImports(sourceFiles),
+				request.packageKind
+			);
+		}
+	}
 	if (target.sysrootFiles && target.sysrootFiles.length > 0) {
 		return target.sysrootFiles
 			.map((entry) => createSysrootDependency(entry.runtimePath))
@@ -341,16 +369,20 @@ async function resolveCompileRequest(
 			error: validationError
 		} as const;
 	}
+	const normalizedFiles = normalizeCompileRequestSource(request);
+	const normalizedRequest = {
+		...request,
+		files: normalizedFiles
+	} satisfies BrowserGoCompileRequest;
 	return {
 		request: {
-			...request,
+			...normalizedRequest,
 			target: normalizeRequestedTarget(request),
-			files: normalizeCompileRequestSource(request),
 			packageImportPath: normalizePackageImportPath(request),
 			dependencies: await resolveAutoDependencies(
 				manifest,
 				runtimeBaseUrl,
-				request,
+				normalizedRequest,
 				fetchImpl,
 				reportAssetProgress
 			)

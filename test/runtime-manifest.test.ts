@@ -82,4 +82,25 @@ describe('runtime manifest', () => {
 			expect.arrayContaining(['wasip1/wasm', 'wasip2/wasm', 'wasip3/wasm', 'js/wasm'])
 		);
 	});
+
+	it('keeps optional stdlib index metadata on normalized targets', () => {
+		const manifest = normalizeRuntimeManifest({
+			...createRuntimeManifest(),
+			targets: {
+				...createRuntimeManifest().targets,
+				'wasip1/wasm': {
+					...createRuntimeManifest().targets['wasip1/wasm'],
+					stdlibIndex: {
+						asset: 'sysroot/wasip1.stdlib-index.json.gz',
+						packageCount: 42
+					}
+				}
+			}
+		});
+
+		expect(manifest.targets['wasip1/wasm']?.stdlibIndex).toEqual({
+			asset: 'sysroot/wasip1.stdlib-index.json.gz',
+			packageCount: 42
+		});
+	});
 });

@@ -31,6 +31,18 @@ async function buildPreview1StdoutModule() {
 	return new Uint8Array(binary.buffer);
 }
 
+async function buildEmptyModule() {
+	const wabtApi = await wabt();
+	const parsed = wabtApi.parseWat(
+		'empty.wat',
+		`(module
+			(memory (export "mem") 1)
+		)`
+	);
+	const binary = parsed.toBinary({});
+	return new Uint8Array(binary.buffer);
+}
+
 describe('browser execution', () => {
 	it('builds a wasi host with PWD=/ and a root preopen', () => {
 		const host = createBrowserWasiHost({
@@ -75,13 +87,85 @@ describe('browser execution', () => {
 		}
 	});
 
-	it('rejects js/wasm execution until wasm_exec.js is wired', async () => {
-		await expect(
-			executeBrowserGoArtifact({
-				bytes: new Uint8Array([0, 97, 115, 109]),
+	it('executes js/wasm artifacts through wasm_exec.js', async () => {
+		const bytes = await buildEmptyModule();
+		const result = await executeBrowserGoArtifact(
+			{
+				bytes,
 				target: 'js/wasm',
 				format: 'js-wasm'
-			})
-		).rejects.toThrow(/currently executes only preview1-compatible wasi core-wasm artifacts/);
+			},
+			{
+				manifest: {
+					manifestVersion: 1,
+					version: 'test-runtime-v1',
+					goVersion: 'go1.26.1',
+					defaultTarget: 'js/wasm',
+					compiler: {
+						compile: {
+							asset: 'tools/compile.wasm.gz',
+							argv0: 'compile',
+							memory: {
+								initialPages: 64,
+								maximumPages: 512
+							}
+						},
+						link: {
+							asset: 'tools/link.wasm.gz',
+							argv0: 'link',
+							memory: {
+								initialPages: 64,
+								maximumPages: 512
+							}
+						},
+						compileTimeoutMs: 30_000,
+						linkTimeoutMs: 30_000,
+						host: {
+							rootDirectory: '/',
+							pwd: '/',
+							tmpDirectory: '/tmp',
+							env: ['HOME=/', 'PWD=/']
+						}
+					},
+					targets: {
+						'js/wasm': {
+							goos: 'js',
+							goarch: 'wasm',
+							artifactFormat: 'js-wasm',
+							execution: {
+								kind: 'js-wasm-exec',
+								wasmExecJs: 'runtime/wasm_exec.js'
+							},
+							planner: {
+								workspaceRoot: '/workspace',
+								importcfgPath: '/workspace/importcfg',
+								embedcfgPath: '/workspace/embedcfg',
+								compileOutputPath: '/workspace/pkg/main.a',
+								linkOutputPath: '/workspace/bin/main.wasm',
+								defaultLang: 'go1.26',
+								defaultTrimpath: '/workspace'
+							}
+						}
+					}
+				},
+				fetchImpl: async () =>
+					new Response(`globalThis.Go = class {
+						constructor() {
+							this.argv = ['js'];
+							this.env = {};
+							this.importObject = {};
+							this.exit = () => {};
+						}
+						async run() {
+							globalThis.fs.writeSync(1, new TextEncoder().encode('js-hi\\n'));
+							this.exit(0);
+						}
+					};`)
+			}
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toBe('js-hi\n');
+		expect(result.stderr).toBe('');
 	});
 });

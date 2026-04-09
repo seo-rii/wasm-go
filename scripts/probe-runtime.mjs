@@ -41,11 +41,11 @@ async function main() {
 	const [{ compileGo, executeBrowserGoArtifact }] = await Promise.all([
 		import(pathToFileURL(path.join(distRoot, 'index.js')).toString())
 	]);
-	const packagedTargets = ['wasip1/wasm', 'wasip2/wasm', 'wasip3/wasm'].filter(
+	const packagedTargets = ['wasip1/wasm', 'wasip2/wasm', 'wasip3/wasm', 'js/wasm'].filter(
 		(target) => manifest.targets[target]
 	);
 	if (packagedTargets.length === 0) {
-		throw new Error('runtime manifest is missing all preview wasi targets');
+		throw new Error('runtime manifest is missing all packaged targets');
 	}
 	for (const targetKey of packagedTargets) {
 		const target = manifest.targets[targetKey];

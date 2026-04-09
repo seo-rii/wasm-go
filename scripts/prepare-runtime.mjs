@@ -27,7 +27,7 @@ const hostArchives = {
 		sha256: '353df43a7811ce284c8938b5f3c7df40b7bfb6f56cb165b150bc40b5e2dd541f'
 	}
 };
-const packagedWasiTargets = ['wasip1/wasm', 'wasip2/wasm', 'wasip3/wasm'];
+const packagedTargets = ['wasip1/wasm', 'wasip2/wasm', 'wasip3/wasm', 'js/wasm'];
 
 function hostKey() {
 	return `${process.platform}-${process.arch}`;
@@ -331,7 +331,8 @@ async function main() {
 	const archiveInfo = await ensureDownloadedArchive(cacheDir);
 	const toolchain = await ensureExtractedToolchain(cacheDir, archiveInfo);
 	const gocacheDir = path.join(buildTempDir, 'gocache');
-	const pkgDir = path.join(buildTempDir, 'pkg', 'wasip1_wasm');
+	const wasip1PkgDir = path.join(buildTempDir, 'pkg', 'wasip1_wasm');
+	const jsPkgDir = path.join(buildTempDir, 'pkg', 'js_wasm');
 	const env = {
 		...process.env,
 		CGO_ENABLED: '0',
@@ -345,7 +346,8 @@ async function main() {
 	};
 	await rm(path.join(buildTempDir, 'out'), { recursive: true, force: true });
 	await mkdir(path.join(buildTempDir, 'out', 'tools'), { recursive: true });
-	await mkdir(pkgDir, { recursive: true });
+	await mkdir(wasip1PkgDir, { recursive: true });
+	await mkdir(jsPkgDir, { recursive: true });
 	const compileWasmPath = path.join(buildTempDir, 'out', 'tools', 'compile.wasm');
 	const linkWasmPath = path.join(buildTempDir, 'out', 'tools', 'link.wasm');
 	await runCommand(
@@ -360,7 +362,7 @@ async function main() {
 	);
 	await runCommand(
 		toolchain.goBinary,
-		['install', '-trimpath', '-buildvcs=false', '-pkgdir', pkgDir, '-a', 'std'],
+		['install', '-trimpath', '-buildvcs=false', '-pkgdir', wasip1PkgDir, '-a', 'std'],
 		{
 			env: {
 				...env,
@@ -368,8 +370,24 @@ async function main() {
 			}
 		}
 	);
-	const packedSysroot = await packRuntimeDirectory(pkgDir, '/sysroot');
-	const stdlibIndex = await buildStdlibIndex(toolchain.goBinary, pkgDir, env);
+	await runCommand(
+		toolchain.goBinary,
+		['install', '-trimpath', '-buildvcs=false', '-pkgdir', jsPkgDir, '-a', 'std'],
+		{
+			env: {
+				...env,
+				GOOS: 'js',
+				GODEBUG: 'installgoroot=all'
+			}
+		}
+	);
+	const packedWasip1Sysroot = await packRuntimeDirectory(wasip1PkgDir, '/sysroot');
+	const wasip1StdlibIndex = await buildStdlibIndex(toolchain.goBinary, wasip1PkgDir, env);
+	const packedJsSysroot = await packRuntimeDirectory(jsPkgDir, '/sysroot');
+	const jsStdlibIndex = await buildStdlibIndex(toolchain.goBinary, jsPkgDir, {
+		...env,
+		GOOS: 'js'
+	});
 	await rm(distRuntimeDir, { recursive: true, force: true });
 	await mkdir(path.join(distRuntimeDir, 'tools'), { recursive: true });
 	await mkdir(path.join(distRuntimeDir, 'sysroot'), { recursive: true });
@@ -383,15 +401,27 @@ async function main() {
 	);
 	await writeFile(
 		path.join(distRuntimeDir, 'sysroot', 'wasip1.pack.gz'),
-		gzipSync(packedSysroot.pack)
+		gzipSync(packedWasip1Sysroot.pack)
 	);
 	await writeFile(
 		path.join(distRuntimeDir, 'sysroot', 'wasip1.index.json.gz'),
-		gzipSync(Buffer.from(JSON.stringify(packedSysroot.index, null, 2)))
+		gzipSync(Buffer.from(JSON.stringify(packedWasip1Sysroot.index, null, 2)))
 	);
 	await writeFile(
 		path.join(distRuntimeDir, 'sysroot', 'wasip1.stdlib-index.json.gz'),
-		gzipSync(Buffer.from(JSON.stringify(stdlibIndex, null, 2)))
+		gzipSync(Buffer.from(JSON.stringify(wasip1StdlibIndex, null, 2)))
+	);
+	await writeFile(
+		path.join(distRuntimeDir, 'sysroot', 'js.pack.gz'),
+		gzipSync(packedJsSysroot.pack)
+	);
+	await writeFile(
+		path.join(distRuntimeDir, 'sysroot', 'js.index.json.gz'),
+		gzipSync(Buffer.from(JSON.stringify(packedJsSysroot.index, null, 2)))
+	);
+	await writeFile(
+		path.join(distRuntimeDir, 'sysroot', 'js.stdlib-index.json.gz'),
+		gzipSync(Buffer.from(JSON.stringify(jsStdlibIndex, null, 2)))
 	);
 	const wasmExecRelativePath = await copyMaybeWasmExec(toolchain.goroot, distRuntimeDir);
 	const runtimeManifest = {
@@ -433,12 +463,12 @@ async function main() {
 				sysrootPack: {
 					asset: 'sysroot/wasip1.pack.gz',
 					index: 'sysroot/wasip1.index.json.gz',
-					fileCount: packedSysroot.index.fileCount,
-					totalBytes: packedSysroot.index.totalBytes
+					fileCount: packedWasip1Sysroot.index.fileCount,
+					totalBytes: packedWasip1Sysroot.index.totalBytes
 				},
 				stdlibIndex: {
 					asset: 'sysroot/wasip1.stdlib-index.json.gz',
-					packageCount: stdlibIndex.packageCount
+					packageCount: wasip1StdlibIndex.packageCount
 				},
 				execution: {
 					kind: 'wasi-preview1'
@@ -460,12 +490,12 @@ async function main() {
 				sysrootPack: {
 					asset: 'sysroot/wasip1.pack.gz',
 					index: 'sysroot/wasip1.index.json.gz',
-					fileCount: packedSysroot.index.fileCount,
-					totalBytes: packedSysroot.index.totalBytes
+					fileCount: packedWasip1Sysroot.index.fileCount,
+					totalBytes: packedWasip1Sysroot.index.totalBytes
 				},
 				stdlibIndex: {
 					asset: 'sysroot/wasip1.stdlib-index.json.gz',
-					packageCount: stdlibIndex.packageCount
+					packageCount: wasip1StdlibIndex.packageCount
 				},
 				execution: {
 					kind: 'wasi-preview1'
@@ -487,15 +517,43 @@ async function main() {
 				sysrootPack: {
 					asset: 'sysroot/wasip1.pack.gz',
 					index: 'sysroot/wasip1.index.json.gz',
-					fileCount: packedSysroot.index.fileCount,
-					totalBytes: packedSysroot.index.totalBytes
+					fileCount: packedWasip1Sysroot.index.fileCount,
+					totalBytes: packedWasip1Sysroot.index.totalBytes
 				},
 				stdlibIndex: {
 					asset: 'sysroot/wasip1.stdlib-index.json.gz',
-					packageCount: stdlibIndex.packageCount
+					packageCount: wasip1StdlibIndex.packageCount
 				},
 				execution: {
 					kind: 'wasi-preview1'
+				},
+				planner: {
+					workspaceRoot: '/workspace',
+					importcfgPath: '/workspace/importcfg',
+					embedcfgPath: '/workspace/embedcfg',
+					compileOutputPath: '/workspace/pkg/main.a',
+					linkOutputPath: '/workspace/bin/main.wasm',
+					defaultLang: 'go1.26',
+					defaultTrimpath: '/workspace'
+				}
+			},
+			'js/wasm': {
+				goos: 'js',
+				goarch: 'wasm',
+				artifactFormat: 'js-wasm',
+				sysrootPack: {
+					asset: 'sysroot/js.pack.gz',
+					index: 'sysroot/js.index.json.gz',
+					fileCount: packedJsSysroot.index.fileCount,
+					totalBytes: packedJsSysroot.index.totalBytes
+				},
+				stdlibIndex: {
+					asset: 'sysroot/js.stdlib-index.json.gz',
+					packageCount: jsStdlibIndex.packageCount
+				},
+				execution: {
+					kind: 'js-wasm-exec',
+					wasmExecJs: wasmExecRelativePath
 				},
 				planner: {
 					workspaceRoot: '/workspace',
@@ -526,16 +584,30 @@ async function main() {
 			sysrootPackGzip: 'sysroot/wasip1.pack.gz',
 			sysrootIndexGzip: 'sysroot/wasip1.index.json.gz',
 			stdlibIndexGzip: 'sysroot/wasip1.stdlib-index.json.gz',
+			jsSysrootPackGzip: 'sysroot/js.pack.gz',
+			jsSysrootIndexGzip: 'sysroot/js.index.json.gz',
+			jsStdlibIndexGzip: 'sysroot/js.stdlib-index.json.gz',
 			...(wasmExecRelativePath ? { wasmExecJs: wasmExecRelativePath } : {})
 		},
 		sysroot: {
-			fileCount: packedSysroot.index.fileCount,
-			totalBytes: packedSysroot.index.totalBytes
+			wasip1: {
+				fileCount: packedWasip1Sysroot.index.fileCount,
+				totalBytes: packedWasip1Sysroot.index.totalBytes
+			},
+			js: {
+				fileCount: packedJsSysroot.index.fileCount,
+				totalBytes: packedJsSysroot.index.totalBytes
+			}
 		},
 		stdlibIndex: {
-			packageCount: stdlibIndex.packageCount
+			wasip1: {
+				packageCount: wasip1StdlibIndex.packageCount
+			},
+			js: {
+				packageCount: jsStdlibIndex.packageCount
+			}
 		},
-		supportedTargets: packagedWasiTargets
+		supportedTargets: packagedTargets
 	};
 	await writeFile(
 		path.join(distRuntimeDir, 'runtime-manifest.v1.json'),
